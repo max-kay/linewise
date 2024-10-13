@@ -1,0 +1,10 @@
+[package]
+name = "linewise"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+convolve2d = { version = "0.2.0", features = [ "image" ] }
+image = "0.25.2"
+nalgebra = "0.33.0"
+svg = "0.18.0"

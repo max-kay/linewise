@@ -431,6 +431,7 @@ dependencies = [
  "convolve2d",
  "image",
  "nalgebra",
+ "rand",
  "svg",
 ]
 

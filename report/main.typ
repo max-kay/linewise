@@ -67,10 +67,11 @@ In contrast to all other energies this energy depends on two splines $gamma_0$ a
 $ E_g (gamma_0, gamma_1) &= integral_0^(L_0) integral_0^(L_1) rho / norm(arrow(r)_0 - arrow(r)_1) d l_1 d l_0 \
   &= rho integral_0^(n_0) integral_0^(n_1) (norm(dot(arrow(r))_0) norm(dot(arrow(r))_1)) / norm(arrow(r)_0 - arrow(r)_1) d t_1 d t_0 $
 
-== Border Energy
+== Boundary Energy
 The border energy exist so the splines stay within the boundaries during the simulation.
-Let $f(arrow(r))$ be the shortest distance to the border.
-$ E_r &= integral_0^L a f(arrow(r)) d l \ &= a integral_0^n f(arrow(r)) norm(dot(arrow(r))) d t $
+Let $s(arrow(r))$ be the signed distance function to the boundary.
+Let $f(x) = cases(oo "if" x > 0, -1/x "else") $
+$ E_r &= integral_0^L a f(s(arrow(r))) d l \ &= a integral_0^n f(s(arrow(r))) norm(dot(arrow(r))) d t $
 
 
 == Total Energy
@@ -93,7 +94,7 @@ In @tab.energy the formulas for the energies are summerized some constants are r
     [field energy], $ E_(arrow(v), i) = P integral_0^(n_i) dot(arrow(r)_i) dot arrow(v)(arrow(r)_i) d t $, [P],
     [pair interaction energy], $ E_(g, i j) =
       C integral_0^(n_i) integral_0^(n_j) (norm(dot(arrow(r))_i) norm(dot(arrow(r))_j)) / norm(arrow(r)_i - arrow(r)_j) d t_j d t_i $, [C],
-    [border energy], $ E_(r, i) = A integral_0^(n_i) f(arrow(r)_i) norm(dot(arrow(r)_i)) d t $ , [A],
+    [boundary energy], $ E_(r, i) = A integral_0^(n_i) f(s(arrow(r)_i)) norm(dot(arrow(r)_i)) d t $ , [A],
   ),
   caption: [All energy terms]
 )<tab.energy>

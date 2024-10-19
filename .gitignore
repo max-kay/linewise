@@ -1,6 +1,9 @@
 /target
 .DS_Store
 
+
+flamegraph.svg
+
 /out
 
 __pycache__

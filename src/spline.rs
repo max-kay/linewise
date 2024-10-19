@@ -3,11 +3,14 @@ use svg::node::element::{path::Data, Path};
 
 use crate::{
     quad_tree::{Bounded, BoundingBox},
-    MyRng, Vector,
+    MyRng, Rotation, Vector,
 };
+
+#[derive(Clone)]
 pub struct BSpline {
     points: Vec<Vector>,
     vectors: Vec<Vector>,
+    bounds: BoundingBox,
 }
 
 impl BSpline {
@@ -21,12 +24,18 @@ impl BSpline {
             points.len() >= 2,
             "must contain at least two points and vectors"
         );
-        Self { points, vectors }
+        let bounds = calc_bounding_box(&points, &vectors);
+        Self {
+            points,
+            vectors,
+            bounds,
+        }
     }
 
     pub fn push(&mut self, point: Vector, vector: Vector) {
         self.points.push(point);
         self.vectors.push(vector);
+        self.bounds = calc_bounding_box(&self.points, &self.vectors);
     }
 
     pub fn count_segments(&self) -> usize {
@@ -48,17 +57,26 @@ impl BSpline {
             points.push(approx_center + i as f32 * right);
             vectors.push((-1.0).powi(i as i32) * up);
         }
-        Self { points, vectors }
+        let bounds = calc_bounding_box(&points, &vectors);
+        Self {
+            points,
+            vectors,
+            bounds,
+        }
     }
 }
 
 impl BSpline {
+    pub fn first_point(&self) -> Vector {
+        *self.points.first().unwrap()
+    }
+
     pub fn path(&self, t: f32) -> Vector {
-        assert!(0.0 <= t && t <= self.count_segments() as f32);
-        // TODO this may be bad
-        if t == self.count_segments() as f32 {
-            return *self.points.last().unwrap();
-        }
+        debug_assert!(
+            0.0 <= t && t < self.count_segments() as f32,
+            "{t} < {}",
+            self.count_segments()
+        );
         let floor = t.floor() as usize;
         let fract = t.fract();
         (1.0 - fract).powi(3) * self.points[floor]
@@ -68,7 +86,7 @@ impl BSpline {
     }
 
     pub fn derivative(&self, t: f32) -> Vector {
-        assert!(0.0 <= t && t < self.count_segments() as f32);
+        debug_assert!(0.0 <= t && t < self.count_segments() as f32);
         let floor = t.floor() as usize;
         let fract = t.fract();
         3.0 * (1.0 - fract).powi(2) * self.vectors[floor]
@@ -83,7 +101,7 @@ impl BSpline {
     }
 
     pub fn derivative2(&self, t: f32) -> Vector {
-        assert!(0.0 <= t && t < self.count_segments() as f32);
+        debug_assert!(0.0 <= t && t < self.count_segments() as f32);
         let floor = t.floor() as usize;
         let fract = t.fract();
         6.0 * (1.0 - fract)
@@ -100,22 +118,36 @@ impl BSpline {
 
     pub fn length(&self, steps_per_segment: usize) -> f32 {
         let mut sum = 0.0;
-        let mut last_point = *self.points.first().unwrap();
         for t in (0..self.count_segments() * steps_per_segment)
-            .map(|i| (i + 1) as f32 / steps_per_segment as f32)
+            .map(|i| i as f32 / steps_per_segment as f32)
         {
-            let new_point = self.path(t);
-            sum += (new_point - last_point).norm();
-            last_point = new_point;
+            sum += self.derivative(t).norm();
         }
 
-        sum
+        sum / steps_per_segment as f32
     }
 
     pub fn curvature(&self, t: f32) -> f32 {
         let der = self.derivative(t);
         let der2 = self.derivative2(t);
         (der[0] * der2[1] - der2[0] * der[1]) / der.norm().powi(3)
+    }
+}
+
+impl BSpline {
+    pub fn translate(&mut self, vector: Vector) {
+        self.bounds = self.bounds.translate(vector);
+        self.points.iter_mut().for_each(|p| *p += vector)
+    }
+
+    pub fn rotate(&mut self, radians: f32) {
+        let center = self.bounding_box().get_center();
+        let rot = Rotation::new(radians);
+        self.points
+            .iter_mut()
+            .for_each(|point| *point = center + rot * (*point - center));
+        self.vectors.iter_mut().for_each(|vec| *vec = rot * *vec);
+        self.bounds = calc_bounding_box(&self.points, &self.vectors);
     }
 }
 
@@ -147,22 +179,25 @@ impl BSpline {
 
 impl Bounded for BSpline {
     fn bounding_box(&self) -> BoundingBox {
-        let all_points = self
-            .points
-            .iter()
-            .map(Bounded::bounding_box)
-            .reduce(|acc, val| acc.combine(val))
-            .unwrap();
-        let first_control_points = (0..(self.points.len() - 1))
-            .map(|i| (self.points[i] + self.vectors[i]).bounding_box())
-            .reduce(|acc, val| acc.combine(val))
-            .unwrap();
-        let second_control_points = (1..(self.points.len()))
-            .map(|i| (self.points[i] - self.vectors[i]).bounding_box())
-            .reduce(|acc, val| acc.combine(val))
-            .unwrap();
-        all_points
-            .combine(first_control_points)
-            .combine(second_control_points)
+        self.bounds
     }
+}
+
+fn calc_bounding_box(points: &[Vector], vectors: &[Vector]) -> BoundingBox {
+    let all_points = points
+        .iter()
+        .map(Bounded::bounding_box)
+        .reduce(|acc, val| acc.combine(val))
+        .unwrap();
+    let first_control_points = (0..(points.len() - 1))
+        .map(|i| (points[i] + vectors[i]).bounding_box())
+        .reduce(|acc, val| acc.combine(val))
+        .unwrap();
+    let second_control_points = (1..(points.len()))
+        .map(|i| (points[i] - vectors[i]).bounding_box())
+        .reduce(|acc, val| acc.combine(val))
+        .unwrap();
+    all_points
+        .combine(first_control_points)
+        .combine(second_control_points)
 }

@@ -9,7 +9,6 @@ use crate::spline::BSpline;
 use crate::MyRng;
 use crate::Vector;
 use crate::BOUNDARY_INTERACTION_RADIUS;
-use crate::CALCULATION_PRECISION;
 use crate::INTERACTION_RADIUS;
 
 mod params {
@@ -27,16 +26,10 @@ pub struct Polymer {
     original_length: f32,
 }
 
-impl From<BSpline> for Polymer {
-    fn from(value: BSpline) -> Self {
-        Self::new(value)
-    }
-}
-
 impl Polymer {
-    pub fn new(shape: BSpline) -> Self {
+    pub fn new(shape: BSpline, precision: usize) -> Self {
         Polymer {
-            original_length: shape.length(CALCULATION_PRECISION),
+            original_length: shape.length(precision),
             shape,
         }
     }
@@ -45,11 +38,12 @@ impl Polymer {
         approx_center: Vector,
         approx_len_per_segment: f32,
         segments: usize,
+        precision: usize,
         rng: &mut MyRng,
     ) -> Self {
         let shape = BSpline::new_random(approx_center, approx_len_per_segment, segments, rng);
         Polymer {
-            original_length: shape.length(CALCULATION_PRECISION),
+            original_length: shape.length(precision),
             shape,
         }
     }
@@ -140,13 +134,11 @@ impl Polymer {
         let mut interaction_sum = 0.0;
         let mut boundary_sum = 0.0;
 
-        for t in (0..self.shape.count_segments() * steps_per_segment)
-            .map(|i| i as f32 / steps_per_segment as f32)
-        {
-            let position = self.shape.path(t);
-            let der = self.shape.derivative(t);
+        for (seg, t) in self.shape.index_iter(steps_per_segment) {
+            let position = unsafe { self.shape.path(seg, t) };
+            let der = unsafe { self.shape.derivative(seg, t) };
             let der_norm = der.norm();
-            let der2 = self.shape.derivative2(t);
+            let der2 = unsafe { self.shape.derivative2(seg, t) };
 
             length_sum += der_norm;
 
@@ -176,12 +168,11 @@ impl Polymer {
                 }
 
                 // TODO skip segments?
-                for s in (0..other.shape.count_segments() * steps_per_segment)
-                    .map(|i| i as f32 / steps_per_segment as f32)
-                {
-                    let norm = (position - other.shape.path(s)).norm();
+                for (other_seg, other_t) in other.shape.index_iter(steps_per_segment) {
+                    let norm = (position - unsafe { other.shape.path(other_seg, other_t) }).norm();
                     if norm < INTERACTION_RADIUS {
-                        inner_sum += other.shape.derivative(s).norm() / norm;
+                        inner_sum +=
+                            unsafe { other.shape.derivative(other_seg, other_t) }.norm() / norm;
                     }
                 }
                 interaction_sum += inner_sum;

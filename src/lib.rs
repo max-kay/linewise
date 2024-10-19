@@ -5,6 +5,7 @@ use std::f32::{consts::TAU, INFINITY};
 use nalgebra::{Rotation2, Vector2};
 use rand::prelude::*;
 use rand::rngs::SmallRng;
+use spline::BSpline;
 use svg::{node::element::Group, Document, Node};
 
 pub mod picture;
@@ -19,15 +20,12 @@ use sampler::Samples2d;
 
 pub type MyRng = SmallRng;
 
-const CALCULATION_PRECISION: usize = 10;
 const INTERACTION_RADIUS: f32 = 10.0;
 const BOUNDARY_INTERACTION_RADIUS: f32 = 20.0;
 const WIDTH: usize = 200;
 const HEIGHT: usize = 200;
 
 const ROOT_POLYMER_COUNT: usize = 20;
-
-const MAX_SEGMENTS: usize = 5;
 
 pub type Vector = Vector2<f32>;
 pub type Rotation = Rotation2<f32>;
@@ -48,7 +46,7 @@ pub struct Model {
 }
 
 impl Model {
-    pub fn make_example() -> Self {
+    pub fn make_example(precision: usize) -> Self {
         let mut rng = MyRng::from_rng(thread_rng()).unwrap();
         let mut field = Vec::new();
         let mut potential = Vec::new();
@@ -81,7 +79,8 @@ impl Model {
                 polymers.push(Polymer::new_random(
                     position,
                     1.2,
-                    rng.gen_range(1..=MAX_SEGMENTS),
+                    rng.gen_range(1..=BSpline::MAX_SEGMENTS),
+                    precision,
                     &mut rng,
                 ));
             }

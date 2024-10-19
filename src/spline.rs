@@ -6,6 +6,8 @@ use crate::{
     MyRng, Rotation, Vector,
 };
 
+const MAX_LEN: usize = 5;
+
 #[derive(Clone)]
 pub struct BSpline {
     points: Vec<Vector>,
@@ -14,6 +16,7 @@ pub struct BSpline {
 }
 
 impl BSpline {
+    pub const MAX_SEGMENTS: usize = MAX_LEN - 1;
     pub fn new(points: Vec<Vector>, vectors: Vec<Vector>) -> Self {
         assert_eq!(
             points.len(),
@@ -46,7 +49,7 @@ impl BSpline {
         approx_center: Vector,
         approx_len_per_segment: f32,
         segments: usize,
-        rng: &mut MyRng,
+        _rng: &mut MyRng,
     ) -> Self {
         // reimplement TODO
         let up = Vector::new(0.0, approx_len_per_segment);
@@ -67,70 +70,65 @@ impl BSpline {
 }
 
 impl BSpline {
-    pub fn first_point(&self) -> Vector {
-        *self.points.first().unwrap()
+    /// SAFETY assumes segment < self.count_segments.len() - 1 && 0.0 <= t < 1.0
+    pub unsafe fn path(&self, segment: usize, t: f32) -> Vector {
+        (1.0 - t).powi(3) * self.points.get_unchecked(segment)
+            + (1.0 - t).powi(2)
+                * t
+                * (self.points.get_unchecked(segment) + self.vectors.get_unchecked(segment))
+            + (1.0 - t)
+                * t.powi(2)
+                * (self.points.get_unchecked(segment + 1) - self.vectors.get_unchecked(segment + 1))
+            + t.powi(3) * self.points.get_unchecked(segment + 1)
     }
 
-    pub fn path(&self, t: f32) -> Vector {
-        debug_assert!(
-            0.0 <= t && t < self.count_segments() as f32,
-            "{t} < {}",
-            self.count_segments()
-        );
-        let floor = t.floor() as usize;
-        let fract = t.fract();
-        (1.0 - fract).powi(3) * self.points[floor]
-            + (1.0 - fract).powi(2) * fract * (self.points[floor] + self.vectors[floor])
-            + (1.0 - fract) * fract.powi(2) * (self.points[floor + 1] - self.vectors[floor + 1])
-            + fract.powi(3) * self.points[floor + 1]
-    }
-
-    pub fn derivative(&self, t: f32) -> Vector {
-        debug_assert!(0.0 <= t && t < self.count_segments() as f32);
-        let floor = t.floor() as usize;
-        let fract = t.fract();
-        3.0 * (1.0 - fract).powi(2) * self.vectors[floor]
+    /// SAFETY assumes segment < self.count_segments.len() - 1 && 0.0 <= t < 1.0
+    pub unsafe fn derivative(&self, segment: usize, t: f32) -> Vector {
+        3.0 * (1.0 - t).powi(2) * self.vectors.get_unchecked(segment)
             + 6.0
-                * (1.0 - fract)
-                * fract
-                * (self.points[floor + 1]
-                    - self.points[floor]
-                    - self.vectors[floor + 1]
-                    - self.vectors[floor])
-            + 3.0 * fract.powi(2) * self.points[floor + 1]
+                * (1.0 - t)
+                * t
+                * (self.points.get_unchecked(segment + 1)
+                    - self.points.get_unchecked(segment)
+                    - self.vectors.get_unchecked(segment + 1)
+                    - self.vectors.get_unchecked(segment))
+            + 3.0 * t.powi(2) * self.points.get_unchecked(segment + 1)
     }
 
-    pub fn derivative2(&self, t: f32) -> Vector {
-        debug_assert!(0.0 <= t && t < self.count_segments() as f32);
-        let floor = t.floor() as usize;
-        let fract = t.fract();
-        6.0 * (1.0 - fract)
-            * (self.points[floor + 1]
-                - self.points[floor]
-                - self.vectors[floor + 1]
-                - 2.0 * self.vectors[floor])
+    /// SAFETY assumes segment < self.count_segments.len() - 1 && 0.0 <= t < 1.0
+    pub unsafe fn derivative2(&self, segment: usize, t: f32) -> Vector {
+        6.0 * (1.0 - t)
+            * (self.points.get_unchecked(segment + 1)
+                - self.points.get_unchecked(segment)
+                - self.vectors.get_unchecked(segment + 1)
+                - 2.0 * self.vectors.get_unchecked(segment))
             - 6.0
-                * fract
-                * (self.points[floor] - self.points[floor + 1]
-                    + self.vectors[floor]
-                    + 2.0 * self.vectors[floor + 1])
+                * t
+                * (self.points.get_unchecked(segment) - self.points.get_unchecked(segment + 1)
+                    + self.vectors.get_unchecked(segment)
+                    + 2.0 * self.vectors.get_unchecked(segment + 1))
+    }
+
+    /// returns an iter of item segment, t
+    /// for the use in the path function and its derivative
+    pub fn index_iter(&self, steps_per_segment: usize) -> impl Iterator<Item = (usize, f32)> {
+        (0..self.count_segments() * steps_per_segment).map(move |i| {
+            (
+                i / steps_per_segment,
+                (i % steps_per_segment) as f32 / steps_per_segment as f32,
+            )
+        })
     }
 
     pub fn length(&self, steps_per_segment: usize) -> f32 {
         let mut sum = 0.0;
-        for t in (0..self.count_segments() * steps_per_segment)
-            .map(|i| i as f32 / steps_per_segment as f32)
-        {
-            sum += self.derivative(t).norm();
+        for (seg, t) in self.index_iter(steps_per_segment) {
+            unsafe {
+                sum += self.derivative(seg, t).norm();
+            }
         }
 
         sum / steps_per_segment as f32
-    }
-
-    pub fn curvature(&self, t: f32) -> f32 {
-        let der = self.derivative(t);
-        let der2 = self.derivative2(t);
-        (der[0] * der2[1] - der2[0] * der[1]) / der.norm().powi(3)
     }
 }
 

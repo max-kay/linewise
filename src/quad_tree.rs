@@ -138,6 +138,15 @@ pub trait Bounded {
     fn bounding_box(&self) -> BoundingBox;
 }
 
+impl<T> Bounded for Box<T>
+where
+    T: Bounded,
+{
+    fn bounding_box(&self) -> BoundingBox {
+        self.as_ref().bounding_box()
+    }
+}
+
 pub struct QuadTree<T: Bounded> {
     root: Node<T>,
     len: usize,

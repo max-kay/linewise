@@ -52,11 +52,20 @@ impl BSpline {
     ) -> Self {
         // reimplement TODO
         let mut points = vec![Vector::zeros()];
-        let mut vectors = vec![Vector::new(approx_len_per_segment * 0.5, 0.0)];
         for _ in 0..segments {
-            points.push(points.last().unwrap() + rand_unit(rng) * approx_len_per_segment);
-            vectors.push(rand_unit(rng) * approx_len_per_segment * 0.5);
+            let mut translation = rand_unit(rng);
+            while translation.dot(&Vector::new(1.0, 0.0)) < 0.2 {
+                translation = rand_unit(rng)
+            }
+            points.push(points.last().unwrap() + translation * approx_len_per_segment);
         }
+
+        let mut vectors = vec![Vector::new(approx_len_per_segment * 0.5, 0.0)];
+        for i in 0..segments - 1 {
+            vectors.push((points[i + 2] - points[i]).normalize() * 0.5 * approx_len_per_segment)
+        }
+        vectors.push(Vector::new(approx_len_per_segment * 0.5, 0.0));
+
         let bounds = calc_bounding_box(&points, &vectors);
         let mut this = Self {
             points,

@@ -110,7 +110,7 @@ impl Model {
                 polymers.push(Polymer::new_random(
                     position,
                     SEGMENT_LEN,
-                    rng.gen_range(1..=3),
+                    rng.gen_range(1..=4),
                     precision,
                     &mut rng,
                 ));

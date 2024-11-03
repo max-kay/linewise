@@ -1,23 +1,20 @@
-use std::f32::INFINITY;
-use std::ops::Add;
-use std::ops::AddAssign;
-
 use crate::quad_tree::Bounded;
-use crate::quad_tree::BoundingBox;
+use crate::quad_tree::Rect;
 use crate::sampler::Samples2d;
 use crate::spline::BSpline;
 use crate::MyRng;
 use crate::Vector;
-use crate::BOUNDARY_INTERACTION_RADIUS;
-use crate::INTERACTION_RADIUS;
+
+mod energy;
+pub use energy::Energy;
 
 mod params {
-    pub const S: f32 = 1.0;
-    pub const B: f32 = 1.0;
-    pub const Q: f32 = 1.0;
-    pub const P: f32 = 1.0;
-    pub const C: f32 = 1.0;
-    pub const A: f32 = 1.0;
+    pub const S: f32 = 100.0;
+    pub const B: f32 = 0.0;
+    pub const Q: f32 = 50.0;
+    pub const P: f32 = 100000.0;
+    pub const C: f32 = 500000.0;
+    pub const R: f32 = 0.0001;
 }
 
 #[derive(Clone)]
@@ -57,75 +54,33 @@ impl Polymer {
     pub fn rotate(&mut self, radians: f32) {
         self.shape.rotate(radians)
     }
-}
 
-#[derive(Debug, Copy, Clone)]
-pub struct Energy {
-    pub strain_energy: f32,
-    pub bending_energy: f32,
-    pub potential_energy: f32,
-    pub field_energy: f32,
-    pub pair_energy: f32,
-    pub boundary_energy: f32,
-}
-
-impl Energy {
-    pub fn zero() -> Self {
-        Self {
-            strain_energy: 0.0,
-            bending_energy: 0.0,
-            potential_energy: 0.0,
-            field_energy: 0.0,
-            pair_energy: 0.0,
-            boundary_energy: 0.0,
-        }
-    }
-
-    pub fn sum(&self) -> f32 {
-        self.strain_energy
-            + self.bending_energy
-            + self.potential_energy
-            + self.field_energy
-            + self.pair_energy
-            + self.boundary_energy
-    }
-
-    pub fn half_interaction(mut self) -> Self {
-        self.pair_energy /= 2.0;
-        self
+    pub fn bend_at_segment(&mut self, segment: usize, angle: f32) {
+        self.shape.bend_at_segment(segment, angle)
     }
 }
-
-impl Add for Energy {
-    type Output = Energy;
-
-    fn add(self, rhs: Self) -> Self::Output {
-        Self {
-            strain_energy: self.strain_energy + rhs.strain_energy,
-            bending_energy: self.bending_energy + rhs.bending_energy,
-            potential_energy: self.potential_energy + rhs.potential_energy,
-            field_energy: self.field_energy + rhs.field_energy,
-            pair_energy: self.pair_energy + rhs.pair_energy,
-            boundary_energy: self.boundary_energy + rhs.boundary_energy,
-        }
+impl Polymer {
+    pub fn length(&self, precision: usize) -> f32 {
+        self.shape.length(precision)
     }
-}
 
-impl AddAssign for Energy {
-    fn add_assign(&mut self, rhs: Self) {
-        *self = *self + rhs
+    pub fn original_len(&self) -> f32 {
+        self.original_length
+    }
+    pub fn count_segments(&self) -> usize {
+        self.shape.count_segments()
     }
 }
 
 /// Energy calculation functions
 impl Polymer {
-    pub fn all_energies(
+    pub fn all_energies<'a>(
         &self,
         potential: &Samples2d<f32>,
         field: &Samples2d<Vector>,
-        others: Vec<&Self>,
+        mut others: impl Iterator<Item = &'a Self>,
         steps_per_segment: usize,
-        boundary: BoundingBox,
+        boundary: Rect,
     ) -> Energy {
         let mut length_sum = 0.0;
         let mut bending_sum = 0.0;
@@ -144,24 +99,23 @@ impl Polymer {
 
             bending_sum += (der.x * der2.y - der2.x * der.y).powi(2) / der_norm.powi(5);
 
-            match potential.get_sample(position) {
-                Some(sample) => potential_sum += sample * der_norm,
-                None => (), //TODO ?
+            if let Some(sample) = potential.get_sample(position) {
+                potential_sum += sample * der_norm
             }
 
             if let Some(vector) = field.get_sample(position) {
-                field_sum += der.dot(vector);
+                field_sum -= der.dot(vector).powi(2) * der_norm;
             }
 
-            let mut inner_sum = 0.0;
-            for other in &others {
-                if std::ptr::eq(self, *other) {
+            for other in &mut others {
+                let mut inner_sum = 0.0;
+                if std::ptr::eq(self, other) {
                     continue;
                 }
 
                 if !other
                     .bounding_box()
-                    .add_radius(INTERACTION_RADIUS)
+                    .add_radius(super::INTERACTION_RADIUS)
                     .contains_point(position)
                 {
                     continue;
@@ -170,46 +124,49 @@ impl Polymer {
                 // TODO skip segments?
                 for (other_seg, other_t) in other.shape.index_iter(steps_per_segment) {
                     let norm = (position - unsafe { other.shape.path(other_seg, other_t) }).norm();
-                    if norm < INTERACTION_RADIUS {
+                    if norm < super::INTERACTION_RADIUS {
                         inner_sum +=
-                            unsafe { other.shape.derivative(other_seg, other_t) }.norm() / norm;
+                            // SAFETY is from index_iter
+                            unsafe { other.shape.derivative(other_seg, other_t) }.norm().powi(3) / norm;
                     }
                 }
-                interaction_sum += inner_sum;
+                interaction_sum += inner_sum * der_norm;
             }
 
             let signed_dist = boundary.signed_distance(position);
-            if signed_dist < BOUNDARY_INTERACTION_RADIUS {
+            if signed_dist > -super::BOUNDARY_INTERACTION_LAYER {
                 if signed_dist > 0.0 {
-                    boundary_sum += INFINITY;
+                    boundary_sum = f32::INFINITY;
+                } else {
+                    boundary_sum += 1.0 / signed_dist.powi(2)
                 }
-                boundary_sum += 1.0 / signed_dist
             }
         }
 
         let len = length_sum / steps_per_segment as f32;
-
         Energy {
             strain_energy: params::S
                 * len
-                * (self.original_length - len / self.original_length).powi(2)
+                * ((self.original_length - len) / self.original_length).powi(2)
                 / 2.0,
             bending_energy: params::B * bending_sum / steps_per_segment as f32,
             potential_energy: params::Q * potential_sum / steps_per_segment as f32,
             field_energy: params::P * field_sum / steps_per_segment as f32,
-            pair_energy: params::C * interaction_sum
+            interaction_energy: params::C * interaction_sum
                 / (steps_per_segment * steps_per_segment) as f32,
-            boundary_energy: params::A * boundary_sum / steps_per_segment as f32,
+            boundary_energy: params::R * boundary_sum / steps_per_segment as f32,
         }
     }
+}
 
+impl Polymer {
     pub fn as_path(&self, stroke_width: f32) -> svg::node::element::Path {
         self.shape.as_path(stroke_width)
     }
 }
 
 impl Bounded for Polymer {
-    fn bounding_box(&self) -> BoundingBox {
+    fn bounding_box(&self) -> Rect {
         self.shape.bounding_box()
     }
 }

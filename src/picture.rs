@@ -2,7 +2,7 @@ use std::{f32, usize};
 
 use convolve2d::{convolve2d, kernel, Matrix};
 
-use crate::{sampler::Samples2d, Vector};
+use crate::{quad_tree::Rect, sampler::Samples2d, Vector};
 
 pub fn get_image() -> (Samples2d<Vector>, Samples2d<f32>) {
     let berset = image::open("./berset dunkel.jpg").unwrap().to_luma32f();
@@ -19,19 +19,13 @@ pub fn get_image() -> (Samples2d<Vector>, Samples2d<f32>) {
             field,
             berset.width() as usize,
             berset.height() as usize,
-            0.0,
-            1.0,
-            0.0,
-            1.0,
+            Rect::new(0.0, 1.0, 0.0, 1.0),
         ),
         Samples2d::new(
             berset.to_vec(),
             berset.width() as usize,
             berset.height() as usize,
-            0.0,
-            1.0,
-            0.0,
-            1.0,
+            Rect::new(0.0, 1.0, 0.0, 1.0),
         ),
     )
 }

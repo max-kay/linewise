@@ -1,22 +1,21 @@
-use nalgebra::ComplexField;
+use std::f32::consts::TAU;
+
+use rand::Rng;
 use svg::node::element::{path::Data, Path};
 
 use crate::{
-    quad_tree::{Bounded, BoundingBox},
-    MyRng, Rotation, Vector,
+    quad_tree::{Bounded, Rect},
+    rand_unit, MyRng, Rotation, Vector,
 };
-
-const MAX_LEN: usize = 5;
 
 #[derive(Clone)]
 pub struct BSpline {
     points: Vec<Vector>,
     vectors: Vec<Vector>,
-    bounds: BoundingBox,
+    bounds: Rect,
 }
 
 impl BSpline {
-    pub const MAX_SEGMENTS: usize = MAX_LEN - 1;
     pub fn new(points: Vec<Vector>, vectors: Vec<Vector>) -> Self {
         assert_eq!(
             points.len(),
@@ -49,23 +48,24 @@ impl BSpline {
         approx_center: Vector,
         approx_len_per_segment: f32,
         segments: usize,
-        _rng: &mut MyRng,
+        rng: &mut MyRng,
     ) -> Self {
         // reimplement TODO
-        let up = Vector::new(0.0, approx_len_per_segment);
-        let right = Vector::new(approx_len_per_segment, 0.0);
-        let mut points = vec![approx_center];
-        let mut vectors = vec![up];
-        for i in 1..=segments {
-            points.push(approx_center + i as f32 * right);
-            vectors.push((-1.0).powi(i as i32) * up);
+        let mut points = vec![Vector::zeros()];
+        let mut vectors = vec![Vector::new(approx_len_per_segment * 0.5, 0.0)];
+        for _ in 0..segments {
+            points.push(points.last().unwrap() + rand_unit(rng) * approx_len_per_segment);
+            vectors.push(rand_unit(rng) * approx_len_per_segment * 0.5);
         }
         let bounds = calc_bounding_box(&points, &vectors);
-        Self {
+        let mut this = Self {
             points,
             vectors,
             bounds,
-        }
+        };
+        this.translate(approx_center - bounds.get_center());
+        this.rotate(rng.gen::<f32>() * TAU);
+        this
     }
 }
 
@@ -73,10 +73,12 @@ impl BSpline {
     /// SAFETY assumes segment < self.count_segments.len() - 1 && 0.0 <= t < 1.0
     pub unsafe fn path(&self, segment: usize, t: f32) -> Vector {
         (1.0 - t).powi(3) * self.points.get_unchecked(segment)
-            + (1.0 - t).powi(2)
+            + 3.0
+                * (1.0 - t).powi(2)
                 * t
                 * (self.points.get_unchecked(segment) + self.vectors.get_unchecked(segment))
-            + (1.0 - t)
+            + 3.0
+                * (1.0 - t)
                 * t.powi(2)
                 * (self.points.get_unchecked(segment + 1) - self.vectors.get_unchecked(segment + 1))
             + t.powi(3) * self.points.get_unchecked(segment + 1)
@@ -92,7 +94,7 @@ impl BSpline {
                     - self.points.get_unchecked(segment)
                     - self.vectors.get_unchecked(segment + 1)
                     - self.vectors.get_unchecked(segment))
-            + 3.0 * t.powi(2) * self.points.get_unchecked(segment + 1)
+            + 3.0 * t.powi(2) * self.vectors.get_unchecked(segment + 1)
     }
 
     /// SAFETY assumes segment < self.count_segments.len() - 1 && 0.0 <= t < 1.0
@@ -147,6 +149,18 @@ impl BSpline {
         self.vectors.iter_mut().for_each(|vec| *vec = rot * *vec);
         self.bounds = calc_bounding_box(&self.points, &self.vectors);
     }
+
+    pub fn bend_at_segment(&mut self, segment: usize, angle: f32) {
+        debug_assert!(segment < self.points.len() - 1);
+        let center = unsafe { self.path(segment, 0.5) };
+        let rot = Rotation::new(angle);
+        self.points[segment + 1..]
+            .iter_mut()
+            .for_each(|point| *point = rot * (*point - center) + center);
+        self.vectors[segment + 1..]
+            .iter_mut()
+            .for_each(|vec| *vec = rot * *vec);
+    }
 }
 
 impl BSpline {
@@ -176,12 +190,12 @@ impl BSpline {
 }
 
 impl Bounded for BSpline {
-    fn bounding_box(&self) -> BoundingBox {
+    fn bounding_box(&self) -> Rect {
         self.bounds
     }
 }
 
-fn calc_bounding_box(points: &[Vector], vectors: &[Vector]) -> BoundingBox {
+fn calc_bounding_box(points: &[Vector], vectors: &[Vector]) -> Rect {
     let all_points = points
         .iter()
         .map(Bounded::bounding_box)

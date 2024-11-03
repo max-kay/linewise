@@ -7,7 +7,7 @@ const LINE_WIDTH: f32 = 1.0 * MM;
 const PRECISION: usize = 15;
 
 const T_START: f32 = 1.0;
-const T_END: f32 = 0.05;
+const T_END: f32 = 0.005;
 
 const T_STEPS: u32 = 10;
 
@@ -15,7 +15,7 @@ fn temp(i: u32) -> f32 {
     T_START * ((T_END / T_START).ln() / ((T_STEPS - 1) as f32) * i as f32).exp()
 }
 
-const SWEEPS: i32 = 200;
+const SWEEPS: i32 = 400;
 
 fn clear_or_create_dir(path: impl AsRef<Path>) -> std::io::Result<()> {
     let path = path.as_ref();

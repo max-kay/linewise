@@ -31,7 +31,7 @@ pub const MM_PER_PX: f32 = 1.0 / PX_PER_MM;
 const SAMPLE_WIDTH: usize = 2480;
 const SAMPLE_HEIGHT: usize = 3508;
 
-const ROOT_POLYMER_COUNT: usize = 20;
+const ROOT_POLYMER_COUNT: usize = 30;
 const SEGMENT_LEN: f32 = 0.0113;
 
 const BOUNDARY_INTERACTION_LAYER: f32 = 0.2;

@@ -10,8 +10,8 @@ pub use energy::Energy;
 
 mod params {
     pub const S: f32 = 100.0;
-    pub const B: f32 = 0.0;
-    pub const Q: f32 = 50.0;
+    pub const B: f32 = 0.00001;
+    pub const Q: f32 = 5.0;
     pub const P: f32 = 100000.0;
     pub const C: f32 = 500000.0;
     pub const R: f32 = 0.0001;
@@ -59,6 +59,7 @@ impl Polymer {
         self.shape.bend_at_segment(segment, angle)
     }
 }
+
 impl Polymer {
     pub fn length(&self, precision: usize) -> f32 {
         self.shape.length(precision)

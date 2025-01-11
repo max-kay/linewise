@@ -7,14 +7,14 @@ use std::{
 };
 
 use chrono::Utc;
-use image::{Pixel, RgbImage};
+use convolve2d::{convolve2d, kernel};
+use image::DynamicImage;
 use nalgebra::{Rotation2, Vector2};
 use rand::prelude::*;
 use rand::rngs::SmallRng;
 use serde::{Deserialize, Serialize};
 use svg::{node::element::Group, Document, Node};
 
-pub mod picture;
 pub mod plt;
 pub mod polymer;
 pub mod quad_tree;
@@ -252,32 +252,32 @@ pub struct ModelBuilder {
 }
 
 impl ModelBuilder {
-    pub fn add_samples_from_img(mut self, img: RgbImage) -> Self {
-        // TODO: use sobel filter
-        let width = img.width() as usize;
-        let height = img.height() as usize;
+    pub fn add_samples_from_img(mut self, img: DynamicImage) -> Self {
+        let gray = img.to_luma32f();
+        let (w, h, x) = convolve2d(&gray, &kernel::sobel::x::<f32>()).into_parts();
+        let (_, _, y) = convolve2d(&gray, &kernel::sobel::y::<f32>()).into_parts();
+        let width = gray.width() as usize;
+        let height = gray.height() as usize;
         let aspect = width as f32 / height as f32;
         let boundary = Rect::new(0.0, aspect.sqrt(), 0.0, 1.0 / aspect.sqrt());
 
-        let gray: Vec<_> = img
-            .pixels()
-            .map(|val| val.to_luma().0[0] as f32 / u8::MAX as f32)
-            .collect();
+        let potential = Samples2d::new(
+            gray.pixels().map(|val| val.0[0]).collect(),
+            width,
+            height,
+            boundary,
+        );
 
-        let potential = Samples2d::new(gray.clone(), width, height, boundary);
-
-        let mut difference: Vec<Vector> = Vec::with_capacity(gray.len());
-        for y in 0..height - 1 {
-            for x in 0..width - 1 {
-                let index = x + y * width;
-                difference.push(Vector::new(
-                    gray[index + 1] - gray[index],
-                    gray[index + width] - gray[index],
-                ))
-            }
-        }
-
-        let field = Samples2d::new(difference, width - 1, height - 1, boundary);
+        let field = Samples2d::new(
+            x.iter()
+                .zip(y.iter())
+                // the division by 8 is for the max value a pixel could be
+                .map(|(&x, &y)| Vector::new(x / 8.0, y / 8.0))
+                .collect(),
+            w,
+            h,
+            boundary,
+        );
         // potential.as_img("pot.png");
         // field.map(|vec| vec.x).as_img("x.png");
         // field.map(|vec| vec.y).as_img("y.png");
@@ -553,7 +553,7 @@ impl Model {
             let path = self.log_dir.join("full.ron");
             fs::write(path, ron::to_string(&self).unwrap()).unwrap()
         }
-        println!("Finshed Running")
+        println!("Finished Running")
     }
 
     pub fn clear_logs(&mut self) {

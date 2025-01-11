@@ -1,13 +1,13 @@
 use std::fs::File;
 use std::io::BufReader;
 
-use image::{ImageFormat, RgbImage};
+use image::ImageFormat;
 use linewise::{Model, ModelParameters};
 
 fn main() {
     let file = File::open("./in/fern.jpg").unwrap();
     let buf = BufReader::new(file);
-    let img: RgbImage = image::load(buf, ImageFormat::Jpeg).unwrap().into();
+    let img = image::load(buf, ImageFormat::Jpeg).unwrap();
 
     let width = img.width();
     let height = img.height();

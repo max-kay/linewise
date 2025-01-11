@@ -1,6 +1,7 @@
 use std::f32::consts::TAU;
 
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 use svg::node::element::{path::Data, Path};
 
 use crate::{
@@ -8,7 +9,7 @@ use crate::{
     rand_unit, MyRng, Rotation, Vector,
 };
 
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct BSpline {
     points: Vec<Vector>,
     vectors: Vec<Vector>,
@@ -50,7 +51,6 @@ impl BSpline {
         segments: usize,
         rng: &mut MyRng,
     ) -> Self {
-        // reimplement TODO
         let mut points = vec![Vector::zeros()];
         for _ in 0..segments {
             let mut translation = rand_unit(rng);
@@ -176,7 +176,7 @@ impl BSpline {
     pub fn as_path(&self, stroke_width: f32) -> Path {
         let mut data = Data::new().move_to((self.points[0].x, self.points[0].y));
         for i in 0..self.count_segments() {
-            // TODO change to using append and command smooth cubic curve
+            // TODO: change to using append and command smooth cubic curve
             data = data.cubic_curve_to((
                 (
                     self.points[i].x + self.vectors[i].x,

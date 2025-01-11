@@ -1,23 +1,21 @@
+use std::f32::consts::TAU;
+
+use crate::gaussian_vector;
 use crate::quad_tree::Bounded;
 use crate::quad_tree::Rect;
 use crate::sampler::Samples2d;
 use crate::spline::BSpline;
+use crate::ModelParameters;
 use crate::MyRng;
 use crate::Vector;
 
 mod energy;
 pub use energy::Energy;
+use rand::Rng;
+use serde::Deserialize;
+use serde::Serialize;
 
-mod params {
-    pub const S: f32 = 100.0;
-    pub const B: f32 = 0.00001;
-    pub const Q: f32 = 5.0;
-    pub const P: f32 = 100000.0;
-    pub const C: f32 = 500000.0;
-    pub const R: f32 = 0.0001;
-}
-
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct Polymer {
     shape: BSpline,
     original_length: f32,
@@ -47,16 +45,19 @@ impl Polymer {
 }
 
 impl Polymer {
-    pub fn translate(&mut self, vector: Vector) {
-        self.shape.translate(vector)
-    }
-
-    pub fn rotate(&mut self, radians: f32) {
-        self.shape.rotate(radians)
-    }
-
-    pub fn bend_at_segment(&mut self, segment: usize, angle: f32) {
-        self.shape.bend_at_segment(segment, angle)
+    pub fn vary(&self, temp: f32, rng: &mut MyRng) -> Self {
+        let mut new = self.clone();
+        // TODO: clean up magic number mess
+        match rng.gen_range(0..=2) {
+            0 => new.shape.translate(gaussian_vector(rng) * 0.2 * temp),
+            1 => new.shape.rotate(rng.gen::<f32>() * TAU * temp / 2.0),
+            2 => new.shape.bend_at_segment(
+                rng.gen_range(0..new.count_segments()),
+                rng.gen::<f32>() * TAU,
+            ),
+            _ => unreachable!(),
+        }
+        new
     }
 }
 
@@ -80,8 +81,8 @@ impl Polymer {
         potential: &Samples2d<f32>,
         field: &Samples2d<Vector>,
         mut others: impl Iterator<Item = &'a Self>,
-        steps_per_segment: usize,
         boundary: Rect,
+        parameters: &ModelParameters,
     ) -> Energy {
         let mut length_sum = 0.0;
         let mut bending_sum = 0.0;
@@ -90,7 +91,8 @@ impl Polymer {
         let mut interaction_sum = 0.0;
         let mut boundary_sum = 0.0;
 
-        for (seg, t) in self.shape.index_iter(steps_per_segment) {
+        // this loop is the intgral over the current segment
+        for (seg, t) in self.shape.index_iter(parameters.precision) {
             let position = unsafe { self.shape.path(seg, t) };
             let der = unsafe { self.shape.derivative(seg, t) };
             let der_norm = der.norm();
@@ -105,27 +107,32 @@ impl Polymer {
             }
 
             if let Some(vector) = field.get_sample(position) {
-                field_sum -= der.dot(vector).powi(2) * der_norm;
+                field_sum -= der.dot(vector).abs();
             }
 
-            for other in &mut others {
+            for other in (&mut others).into_iter().filter(|o| {
+                o.bounding_box()
+                    .add_radius(parameters.interaction_radius)
+                    .contains_point(position)
+            }) {
                 let mut inner_sum = 0.0;
+                // TODO: should I mark this as unlikely
                 if std::ptr::eq(self, other) {
                     continue;
                 }
 
                 if !other
                     .bounding_box()
-                    .add_radius(super::INTERACTION_RADIUS)
+                    .add_radius(parameters.interaction_radius)
                     .contains_point(position)
                 {
                     continue;
                 }
 
                 // TODO skip segments?
-                for (other_seg, other_t) in other.shape.index_iter(steps_per_segment) {
+                for (other_seg, other_t) in other.shape.index_iter(parameters.precision) {
                     let norm = (position - unsafe { other.shape.path(other_seg, other_t) }).norm();
-                    if norm < super::INTERACTION_RADIUS {
+                    if norm < parameters.interaction_radius {
                         inner_sum +=
                             // SAFETY is from index_iter
                             unsafe { other.shape.derivative(other_seg, other_t) }.norm().powi(3) / norm;
@@ -135,27 +142,29 @@ impl Polymer {
             }
 
             let signed_dist = boundary.signed_distance(position);
-            if signed_dist > -super::BOUNDARY_INTERACTION_LAYER {
-                if signed_dist > 0.0 {
-                    boundary_sum = f32::INFINITY;
-                } else {
-                    boundary_sum += 1.0 / signed_dist.powi(2)
-                }
+            if signed_dist > 0.0 {
+                boundary_sum = f32::INFINITY;
+            } else {
+                boundary_sum += 1.0 / signed_dist.powi(2)
             }
         }
 
-        let len = length_sum / steps_per_segment as f32;
+        let len = length_sum / parameters.precision as f32;
         Energy {
-            strain_energy: params::S
+            strain_energy: parameters.energy_factors.strain_energy
                 * len
                 * ((self.original_length - len) / self.original_length).powi(2)
                 / 2.0,
-            bending_energy: params::B * bending_sum / steps_per_segment as f32,
-            potential_energy: params::Q * potential_sum / steps_per_segment as f32,
-            field_energy: params::P * field_sum / steps_per_segment as f32,
-            interaction_energy: params::C * interaction_sum
-                / (steps_per_segment * steps_per_segment) as f32,
-            boundary_energy: params::R * boundary_sum / steps_per_segment as f32,
+            bending_energy: parameters.energy_factors.bending_energy * bending_sum
+                / parameters.precision as f32,
+            potential_energy: parameters.energy_factors.potential_energy * potential_sum
+                / parameters.precision as f32,
+            field_energy: parameters.energy_factors.field_energy * field_sum
+                / parameters.precision as f32,
+            interaction_energy: parameters.energy_factors.interaction_energy * interaction_sum
+                / (parameters.precision * parameters.precision) as f32,
+            boundary_energy: parameters.energy_factors.boundary_energy * boundary_sum
+                / parameters.precision as f32,
         }
     }
 }

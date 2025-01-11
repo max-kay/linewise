@@ -5,13 +5,16 @@ edition = "2021"
 
 [dependencies]
 convolve2d = { version = "0.2.0", features = [ "image" ] }
+serde = { version = "1.0.217", features = [ "derive" ] }
 either = "1.13.0"
 image = "0.25.2"
-nalgebra = "0.33.0"
+nalgebra = { version = "0.33.0", features = [ "serde-serialize" ] }
 plotters = "0.3.7"
 rand = { version = "0.8.5", features =  [ "small_rng" ] }
+chrono = "0.4.39"
 rand_distr = "0.4.3"
 svg = "0.18.0"
+ron = "0.8.1"
 
 
 [profile.release]

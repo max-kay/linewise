@@ -188,6 +188,7 @@ pub fn rate_plot<const N: usize>(
 fn min(values: &[f32]) -> f32 {
     *values.iter().min_by(|a, b| (**a).total_cmp(*b)).unwrap()
 }
+
 fn max(values: &[f32]) -> f32 {
     *values.iter().max_by(|a, b| (**a).total_cmp(*b)).unwrap()
 }

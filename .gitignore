@@ -5,6 +5,7 @@
 flamegraph.svg
 
 /out
+/my_in
 
 __pycache__
 

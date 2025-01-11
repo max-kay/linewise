@@ -1,7 +1,8 @@
+use serde::{Deserialize, Serialize};
 use svg::node::element::{path::Data, Path};
 
 use crate::Vector;
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Rect {
     x_min: f32,
     x_max: f32,
@@ -75,6 +76,10 @@ impl Rect {
     pub fn height(&self) -> f32 {
         self.y_max - self.y_min
     }
+
+    pub fn aspect_ratio(&self) -> f32 {
+        self.width() / self.height()
+    }
 }
 
 impl Rect {
@@ -144,7 +149,7 @@ impl Rect {
 }
 
 impl Rect {
-    pub fn as_rect(&self, stroke_width: f32) -> Path {
+    pub fn as_svg(&self, stroke_width: f32) -> Path {
         let data = Data::new()
             .move_to((self.x_min, self.y_min))
             .line_to((self.x_min, self.y_max))

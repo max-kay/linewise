@@ -1,6 +1,8 @@
 use std::ops::{Add, AddAssign};
 
-#[derive(Debug, Copy, Clone)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Energy {
     pub strain_energy: f32,
     pub bending_energy: f32,

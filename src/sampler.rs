@@ -1,7 +1,9 @@
 use image::Luma;
+use serde::{Deserialize, Serialize};
 
 use crate::{quad_tree::Rect, Vector};
 
+#[derive(Serialize, Deserialize)]
 pub struct Samples2d<T> {
     samples: Vec<T>,
     width: usize,
@@ -48,6 +50,10 @@ impl<T: Clone> Samples2d<T> {
         }
     }
 
+    pub fn get_bounds(&self) -> Rect {
+        self.bounds
+    }
+
     pub fn map<S>(&self, func: impl Fn(&T) -> S) -> Samples2d<S> {
         Samples2d {
             samples: self.samples.iter().map(func).collect(),
@@ -55,6 +61,10 @@ impl<T: Clone> Samples2d<T> {
             height: self.height,
             bounds: self.bounds,
         }
+    }
+
+    pub fn set_bounds(&mut self, bounds: Rect) {
+        self.bounds = bounds
     }
 }
 
@@ -85,13 +95,13 @@ impl<T> Samples2d<T> {
 }
 
 impl Samples2d<f32> {
-    pub fn as_img(&self) {
+    pub fn as_img(&self, path: &str) {
         let img = image::ImageBuffer::<Luma<u8>, Vec<u8>>::from_vec(
             self.width as u32,
             self.height as u32,
             self.samples.iter().map(|val| (val * 256.0) as u8).collect(),
         )
         .unwrap();
-        img.save("out/sampler_test.png").unwrap();
+        img.save(path).unwrap();
     }
 }

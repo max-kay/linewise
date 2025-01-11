@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
+     width="1984.0" height="1488.0" viewBox="0 0 1984.0 1488.0">
+<defs>
+</defs>
+<path d="M396.8,1190.4 C694.4,297.6,1388.8,372.0,1587.2,1190.4" fill="none" stroke="black" stroke-width="5" />
+<path d="M396.8,1190.4 L694.4,297.6" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
+<path d="M1388.8,372.0 L1587.2,1190.4" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
+<ellipse cx="396.8" cy="1190.4" rx="15" ry="15" fill="black" stroke="black" stroke-width="3" />
+<ellipse cx="694.4" cy="297.6" rx="15" ry="15" fill="none" stroke="black" stroke-width="3" />
+<ellipse cx="1388.8" cy="372.0" rx="15" ry="15" fill="none" stroke="black" stroke-width="3" />
+<ellipse cx="1587.2" cy="1190.4" rx="15" ry="15" fill="black" stroke="black" stroke-width="3" />
+</svg>

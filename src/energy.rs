@@ -52,11 +52,6 @@ impl Energy {
             + self.interaction_energy
             + self.boundary_energy
     }
-
-    pub fn half_interaction(mut self) -> Self {
-        self.interaction_energy /= 2.0;
-        self
-    }
 }
 
 impl Add for Energy {

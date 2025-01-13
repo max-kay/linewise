@@ -10,6 +10,17 @@ pub struct Rect {
     y_max: f32,
 }
 
+impl Default for Rect {
+    fn default() -> Self {
+        Self {
+            x_min: 0.0,
+            x_max: 0.0,
+            y_min: 0.0,
+            y_max: 0.0,
+        }
+    }
+}
+
 impl Rect {
     pub fn new(x_min: f32, x_max: f32, y_min: f32, y_max: f32) -> Self {
         assert!(x_min <= x_max && y_min <= y_max);

@@ -1,6 +1,5 @@
 use either::Either::{self, Left, Right};
 use rand::Rng;
-use serde::{Deserialize, Serialize};
 
 use crate::MyRng;
 
@@ -14,14 +13,12 @@ pub trait Bounded {
     fn bounding_box(&self) -> Rect;
 }
 
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(from = "Vec<T>", into = "Vec<T>")]
-pub struct QuadTree<T: Bounded + Clone> {
+pub struct QuadTree<T: Bounded> {
     root: Node<T>,
     len: usize,
 }
 
-impl<T: Bounded + Clone> QuadTree<T> {
+impl<T: Bounded> QuadTree<T> {
     pub fn new(objects: Vec<T>) -> Self {
         let len = objects.len();
         let bounds = objects
@@ -62,7 +59,7 @@ impl<T: Bounded + Clone> QuadTree<T> {
     }
 }
 
-impl<T: Bounded + Clone> QuadTree<T> {
+impl<T: Bounded> QuadTree<T> {
     fn pop(&mut self, index: usize) -> T {
         self.len -= 1;
         self.root.pop(index).expect_left("out of bounds pop")
@@ -73,12 +70,12 @@ impl<T: Bounded + Clone> QuadTree<T> {
     }
 }
 
-impl<T: Bounded + Clone> From<Vec<T>> for QuadTree<T> {
+impl<T: Bounded> From<Vec<T>> for QuadTree<T> {
     fn from(value: Vec<T>) -> Self {
         Self::new(value)
     }
 }
-impl<T: Bounded + Clone> Into<Vec<T>> for QuadTree<T> {
+impl<T: Bounded> Into<Vec<T>> for QuadTree<T> {
     fn into(self) -> Vec<T> {
         self.root.into()
     }
@@ -91,7 +88,7 @@ struct Node<T: Bounded> {
     children: Option<[Box<Node<T>>; 4]>,
 }
 
-impl<T: Bounded + Clone> Node<T> {
+impl<T: Bounded> Node<T> {
     fn new(objects: Vec<T>, bounds: Rect) -> Self {
         assert!(objects
             .iter()
@@ -197,7 +194,7 @@ impl<T: Bounded + Clone> Node<T> {
     // }
 }
 
-impl<T: Bounded + Clone> Into<Vec<T>> for Node<T> {
+impl<T: Bounded> Into<Vec<T>> for Node<T> {
     fn into(mut self) -> Vec<T> {
         let mut vec: Vec<_> = self.objects.drain(..).collect();
         if let Some(children) = self.children {

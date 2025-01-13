@@ -27,24 +27,23 @@ impl<T: Bounded> Iterator for IntoIter<T> {
     }
 }
 
-impl<T: Bounded + Clone> IntoIterator for super::QuadTree<T> {
+impl<T: Bounded> IntoIterator for super::QuadTree<T> {
     type Item = T;
 
     type IntoIter = IntoIter<T>;
 
     fn into_iter(self) -> Self::IntoIter {
-        IntoIter {
-            stack: vec![self.root],
-        }
+        let mut stack = Vec::new();
+        stack.push(self.root);
+        IntoIter { stack }
     }
 }
 
-impl<T: Bounded + Clone> super::QuadTree<T> {
+impl<T: Bounded> super::QuadTree<T> {
     pub fn iter(&self) -> Iter<'_, T> {
-        Iter {
-            stack: vec![&self.root],
-            index: 0,
-        }
+        let mut stack = Vec::new();
+        stack.push(&self.root);
+        Iter { stack, index: 0 }
     }
 }
 
@@ -87,7 +86,7 @@ impl<'a, T: Bounded> Iterator for Iter<'a, T> {
     }
 }
 
-impl<'a, T: Bounded + Clone> IntoIterator for &'a super::QuadTree<T> {
+impl<'a, T: Bounded> IntoIterator for &'a super::QuadTree<T> {
     type Item = &'a T;
 
     type IntoIter = Iter<'a, T>;
@@ -97,6 +96,7 @@ impl<'a, T: Bounded + Clone> IntoIterator for &'a super::QuadTree<T> {
     }
 }
 
+#[derive(Clone)]
 pub struct QuerryIter<'a, T, F>
 where
     T: Bounded,
@@ -107,10 +107,13 @@ where
     pub(super) index: usize,
 }
 
-impl<T: Bounded + Clone> super::QuadTree<T> {
+impl<T: Bounded> super::QuadTree<T> {
+    /// returns an iterator over all elements for which func(element.bounding_box()) is true
     pub fn querry_iter<F: Fn(Rect) -> bool>(&self, func: F) -> QuerryIter<'_, T, F> {
+        let mut stack = Vec::new();
+        stack.push(&self.root);
         QuerryIter {
-            stack: vec![&self.root],
+            stack,
             predicate: func,
             index: 0,
         }

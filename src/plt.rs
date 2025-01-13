@@ -1,7 +1,8 @@
 use plotters::prelude::*;
-use std::{error::Error, path::Path};
+use std::path::Path;
 
-use crate::polymer::Energy;
+use crate::energy::Energy;
+
 const PLOT_FORMAT: (u32, u32) = (4048, 3027);
 
 const STROKE_WIDTH: u32 = 2;
@@ -10,11 +11,7 @@ const FONT: u32 = 160;
 const S_FONT: u32 = 80;
 const T_FONT: u32 = 60;
 
-pub fn simple_line(
-    values: &[f32],
-    caption: &str,
-    path: impl AsRef<Path>,
-) -> Result<(), Box<dyn Error>> {
+pub fn simple_line(values: &[f32], caption: &str, path: impl AsRef<Path>) -> anyhow::Result<()> {
     let root = BitMapBackend::new(&path, PLOT_FORMAT).into_drawing_area();
     root.fill(&WHITE)?;
 
@@ -51,7 +48,7 @@ pub fn divergent_chart(
     energies: &[Energy],
     caption: &str,
     path: impl AsRef<Path>,
-) -> Result<(), Box<dyn Error>> {
+) -> anyhow::Result<()> {
     let root = BitMapBackend::new(&path, PLOT_FORMAT).into_drawing_area();
     root.fill(&WHITE)?;
 
@@ -133,7 +130,7 @@ pub fn rate_plot<const N: usize>(
     values: &[[f32; N]],
     caption: &str,
     path: impl AsRef<Path>,
-) -> Result<(), Box<dyn Error>> {
+) -> anyhow::Result<()> {
     let root = BitMapBackend::new(&path, PLOT_FORMAT).into_drawing_area();
     root.fill(&WHITE)?;
 

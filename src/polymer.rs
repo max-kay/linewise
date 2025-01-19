@@ -3,33 +3,39 @@ use std::f32::consts::TAU;
 use nalgebra::{Matrix2, Matrix2x3, Matrix2x4, Vector2, Vector3, Vector4};
 use rand::Rng;
 use svg::node::element::{
-    path::{Command, Data},
+    path::{Command, Data, Position},
     Path,
 };
+use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::{
     gaussian_vector,
+    monte_carlo::METHODS,
     quad_tree::{Bounded, Rect},
     rand_unit, MyRng, Rotation, Vector,
 };
 
+#[derive(Clone)]
 pub struct PolymerStorage {
     points_and_vecs: Vec<Vector>,
+    seg_starts: Vec<usize>,
 }
 
 impl PolymerStorage {
     pub fn new() -> Self {
         Self {
             points_and_vecs: Vec::new(),
+            seg_starts: Vec::new(),
         }
     }
 
     pub fn add_polymer(&mut self, mut polymer: OwnedPolymer) -> PolymerRef {
         assert!(
-            polymer.slice.is_none(),
+            polymer.st_ref.is_none(),
             "trying to add an owned polymer which already is in the storage"
         );
         let storage_idx = self.points_and_vecs.len();
+        self.seg_starts.push(storage_idx);
         let segments = polymer.count_segments();
         self.points_and_vecs.append(&mut polymer.points_and_vecs);
         PolymerRef {
@@ -41,6 +47,7 @@ impl PolymerStorage {
 
     pub fn shrink_to_fit(&mut self) {
         self.points_and_vecs.shrink_to_fit();
+        self.seg_starts.shrink_to_fit();
     }
 
     pub fn read(&self, polymer: PolymerRef) -> OwnedPolymer {
@@ -49,18 +56,18 @@ impl PolymerStorage {
                 [polymer.storage_idx..polymer.storage_idx + 2 * (polymer.segments + 1)]
                 .to_vec(),
             bounds: polymer.bounds,
-            slice: Some(polymer),
+            st_ref: Some(polymer),
         }
     }
 
     pub fn revalidate_ref(&mut self, polymer: OwnedPolymer) -> PolymerRef {
         polymer
-            .slice
+            .st_ref
             .expect("can only validate if the polymer is in the Storage")
     }
     pub fn overwrite_polymer(&mut self, polymer: OwnedPolymer) -> PolymerRef {
         let mut this_ref = polymer
-            .slice
+            .st_ref
             .expect("can only overwrite if the polymer is already in the storage");
         this_ref.bounds = polymer.bounds;
         for (i, val) in polymer.points_and_vecs.into_iter().enumerate() {
@@ -88,6 +95,78 @@ impl PolymerStorage {
             })
     }
 
+    pub fn segments<'a>(&'a self) -> impl Iterator<Item = BorrowedSegment<'a>> {
+        (0..self.points_and_vecs.len() / 2 - 1).flat_map(|i| {
+            let st_idx = i * 2;
+            // if the end point of the window I'm trying to construct is the start of a segment
+            // then that window is no valid segment and should be skipped
+            if self.seg_starts.binary_search(&(st_idx + 2)).is_ok() {
+                None
+            } else {
+                // SAFETY: the highest value i can take is len / 2 - 2
+                // so the st_idx is at most len - 4
+                // the slice [len - 4..len] is allways valid
+                let window = &self.points_and_vecs[st_idx..st_idx + 4];
+                let points_and_vecs = unsafe { &*(window.as_ptr() as *const [Vector; 4]) };
+                Some(BorrowedSegment { points_and_vecs })
+            }
+        })
+    }
+
+    pub fn rasterize(
+        &self,
+        line_width: f32,
+        scaling_factor: f32,
+        width: u32,
+        height: u32,
+    ) -> Pixmap {
+        let paint = Paint {
+            shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(0, 0, 0, 255)),
+            ..Default::default()
+        };
+        let mut pix_map = Pixmap::new(width, height).unwrap();
+        pix_map.fill(Color::from_rgba8(255, 255, 255, 255));
+        let mut path = PathBuilder::new();
+        let mut index_iter = self.seg_starts.iter();
+        path.move_to(self.points_and_vecs[0].x, self.points_and_vecs[0].y);
+        index_iter.next();
+        let mut next_start = *index_iter.next().unwrap();
+        for i in 0..(self.points_and_vecs.len() / 2 - 1) {
+            let segment_start = i * 2;
+            if segment_start + 2 == next_start {
+                let mut place_holder = PathBuilder::new();
+                std::mem::swap(&mut place_holder, &mut path);
+                pix_map.stroke_path(
+                    &place_holder.finish().unwrap(),
+                    &paint,
+                    &Stroke {
+                        width: line_width,
+                        ..Default::default()
+                    },
+                    Transform::from_scale(scaling_factor, scaling_factor),
+                    None,
+                );
+                if segment_start + 4 == self.points_and_vecs.len() {
+                    break;
+                }
+                let next_pos = self.points_and_vecs[segment_start + 2];
+                path.move_to(next_pos.x, next_pos.y);
+                next_start = index_iter
+                    .next()
+                    .cloned()
+                    .unwrap_or(self.points_and_vecs.len());
+
+                continue;
+            }
+            let p1 = self.points_and_vecs[segment_start] + self.points_and_vecs[segment_start + 1];
+            let p2 =
+                self.points_and_vecs[segment_start + 2] - self.points_and_vecs[segment_start + 3];
+            let p3 = self.points_and_vecs[segment_start + 2];
+            path.cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+        }
+        pix_map
+    }
+
     pub fn as_path(&self, polymer: &PolymerRef, stroke_width: f32) -> Path {
         let mut data = Data::new().move_to((
             self.points_and_vecs[polymer.storage_idx].x,
@@ -96,7 +175,7 @@ impl PolymerStorage {
         // i points to the start of the segment
         for i in (polymer.storage_idx..polymer.storage_idx + polymer.segments * 2).step_by(2) {
             data.append(Command::CubicCurve(
-                svg::node::element::path::Position::Absolute,
+                Position::Absolute,
                 (
                     (
                         self.points_and_vecs[i].x + self.points_and_vecs[i + 1].x,
@@ -126,16 +205,6 @@ pub struct PolymerRef {
     bounds: Rect,
 }
 
-impl PolymerRef {
-    pub fn duplicate(&self) -> Self {
-        Self {
-            storage_idx: self.storage_idx,
-            segments: self.segments,
-            bounds: self.bounds,
-        }
-    }
-}
-
 impl PartialEq for PolymerRef {
     fn eq(&self, other: &Self) -> bool {
         self.storage_idx == other.storage_idx
@@ -163,7 +232,7 @@ impl Bounded for PolymerRef {
 pub struct OwnedPolymer {
     points_and_vecs: Vec<Vector>,
     bounds: Rect,
-    slice: Option<PolymerRef>,
+    st_ref: Option<PolymerRef>,
 }
 
 impl OwnedPolymer {
@@ -185,18 +254,10 @@ impl OwnedPolymer {
         let mut this = Self {
             points_and_vecs,
             bounds: Rect::default(),
-            slice: None,
+            st_ref: None,
         };
         this.update_bounds();
         this
-    }
-
-    fn duplicate(&self) -> Self {
-        Self {
-            points_and_vecs: self.points_and_vecs.clone(),
-            bounds: self.bounds,
-            slice: self.slice.as_ref().map(PolymerRef::duplicate),
-        }
     }
 
     pub fn count_segments(&self) -> usize {
@@ -246,33 +307,16 @@ impl OwnedPolymer {
     }
 
     pub fn update_bounds(&mut self) {
-        let all_points = self
-            .points()
-            .map(Bounded::bounding_box)
-            .reduce(|acc, val| acc.combine(val))
-            .expect("is non empty");
-        let first_control_points = self.points_and_vecs[0..self.points_and_vecs.len() - 2]
-            .iter()
-            .step_by(2)
-            .zip(
-                self.points_and_vecs[0..self.points_and_vecs.len() - 2]
-                    .iter()
-                    .skip(1)
-                    .step_by(2),
-            )
-            .map(|(p, v)| (p + v).bounding_box())
-            .reduce(|acc, val| acc.combine(val))
-            .expect("is non empty");
-        let second_control_points = self
-            .points()
-            .skip(1)
-            .zip(self.vecs().skip(1))
-            .map(|(p, v)| (p - v).bounding_box())
-            .reduce(|acc, val| acc.combine(val))
-            .expect("is non empty");
-        self.bounds = all_points
-            .combine(first_control_points)
-            .combine(second_control_points);
+        let mut bounds = self.points_and_vecs[0]
+            .bounding_box()
+            .combine(self.points_and_vecs[self.points_and_vecs.len() - 2].bounding_box());
+        for i in 0..self.count_segments() {
+            let c1 = self.points_and_vecs[2 * i] + self.points_and_vecs[2 * i + 1];
+            let c2 = self.points_and_vecs[2 * i + 2] - self.points_and_vecs[2 * i + 3];
+            bounds = bounds.combine(c1.bounding_box());
+            bounds = bounds.combine(c2.bounding_box());
+        }
+        self.bounds = bounds;
     }
 }
 
@@ -287,19 +331,28 @@ impl OwnedPolymer {
 }
 
 impl OwnedPolymer {
-    pub fn vary(&self, transition_scale: f32, rng: &mut MyRng) -> Self {
-        let mut this = self.duplicate();
-        match rng.gen_range(0..=1) {
-            0 => this.translate(gaussian_vector(rng) * transition_scale),
-            1 => this.rotate((rng.gen::<f32>() - 0.5) * TAU * transition_scale / 10.0),
+    pub fn vary(&mut self, transition_scale: [f32; METHODS], rng: &mut MyRng) -> usize {
+        let method = rng.gen_range(0..METHODS);
+        match method {
+            0 => self.translate(gaussian_vector(rng) * transition_scale[0]),
+            1 => self.rotate((rng.gen::<f32>() - 0.5) * transition_scale[1] * TAU),
             _ => unreachable!(),
         }
-        this
+        method
     }
 
     pub fn translate(&mut self, vector: Vector) {
-        self.bounds = self.bounds.translate(vector);
-        self.points_mut().for_each(|p| *p += vector)
+        self.points_mut().for_each(|p| *p += vector);
+        debug_assert!(
+            self.points_and_vecs
+                .iter()
+                .map(|vec| vec.x.is_finite() && vec.y.is_finite())
+                .reduce(|acc, val| acc && val)
+                .expect("is non empty"),
+            "translate{:?}",
+            vector
+        );
+        self.update_bounds();
     }
 
     pub fn rotate(&mut self, radians: f32) {
@@ -308,7 +361,24 @@ impl OwnedPolymer {
         self.points_mut()
             .for_each(|point| *point = center + rot * (*point - center));
         self.vecs_mut().for_each(|vec| *vec = rot * *vec);
+        debug_assert!(
+            self.points_and_vecs
+                .iter()
+                .map(|vec| vec.x.is_finite() && vec.y.is_finite())
+                .reduce(|acc, val| acc && val)
+                .expect("is non empty"),
+            "rotate({})",
+            radians
+        );
         self.update_bounds();
+    }
+
+    pub fn intersects(&self, other: &BorrowedSegment, precision: usize) -> bool {
+        let mut out = false;
+        for segment in self.get_borrowed_segments() {
+            out |= other.interscets(&segment, precision);
+        }
+        out
     }
 }
 
@@ -320,7 +390,7 @@ impl Bounded for OwnedPolymer {
 
 impl PartialEq<PolymerRef> for OwnedPolymer {
     fn eq(&self, other: &PolymerRef) -> bool {
-        self.slice.as_ref().expect("index initialised").storage_idx == other.storage_idx
+        self.st_ref.as_ref().expect("index initialised").storage_idx == other.storage_idx
     }
 }
 
@@ -353,6 +423,12 @@ impl BorrowedSegment<'_> {
     pub fn position_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
         let coord_matrix = self.get_coord_matrix_0();
         Self::s_iter(steps).map(move |s| coord_matrix * Self::get_bernstein_3(s))
+    }
+    pub fn position_iter_with_end(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        let coord_matrix = self.get_coord_matrix_0();
+        (0..steps + 1)
+            .map(move |i| i as f32 / steps as f32)
+            .map(move |s| coord_matrix * Self::get_bernstein_3(s))
     }
 
     pub fn get_coord_matrix_1(&self) -> Matrix2x3<f32> {
@@ -399,5 +475,56 @@ impl BorrowedSegment<'_> {
             .zip(self.derivative_iter(steps))
             .zip(self.derivative2_iter(steps))
             .map(|((path, der), der2)| (path, der, der2))
+    }
+}
+
+fn line_intersects(line_1: &[Vector; 2], line_2: &[Vector; 2]) -> bool {
+    let mat = match Matrix2::from_columns(&[line_2[1] - line_2[0], line_1[0] - line_1[1]])
+        .try_inverse()
+    {
+        Some(inv) => inv,
+        None => return false,
+    };
+    let intersection_vec = mat * (line_1[0] - line_2[0]);
+    (0.0 <= intersection_vec.x && intersection_vec.x <= 1.0)
+        && (0.0 <= intersection_vec.y && intersection_vec.y <= 1.0)
+}
+
+impl BorrowedSegment<'_> {
+    pub fn interscets(&self, other: &Self, precision: usize) -> bool {
+        let points_1: Vec<_> = self.position_iter_with_end(precision).collect();
+        let points_2: Vec<_> = other.position_iter_with_end(precision).collect();
+        let mut intersects = false;
+        for line_1 in points_1.windows(2) {
+            let line_1 = unsafe { &*(line_1.as_ptr() as *const [Vector; 2]) };
+            for line_2 in points_2.windows(2) {
+                let line_2 = unsafe { &*(line_2.as_ptr() as *const [Vector; 2]) };
+                intersects |= line_intersects(line_1, line_2);
+            }
+        }
+        intersects
+    }
+}
+
+impl BorrowedSegment<'_> {
+    pub fn as_triangles(&self, precision: usize, line_width: f32) -> Vec<[Vector; 3]> {
+        let mut out = Vec::new();
+        for i in 0..precision + 1 {
+            let s_0 = i as f32 / precision as f32;
+            let s_1 = (i + 1) as f32 / precision as f32;
+            let p_0 = self.get_coord_matrix_0() * Self::get_bernstein_3(s_0);
+            let offset_0 = Rotation::new(TAU / 4.0)
+                * (self.get_coord_matrix_1() * Self::get_bernstein_2(s_1)).normalize()
+                * line_width
+                / 2.0;
+            let p_1 = self.get_coord_matrix_0() * Self::get_bernstein_3(s_1);
+            let offset_1 = Rotation::new(TAU / 4.0)
+                * (self.get_coord_matrix_1() * Self::get_bernstein_2(s_1)).normalize()
+                * line_width
+                / 2.0;
+            out.push([p_0 + offset_0, p_0 - offset_0, p_1 + offset_1]);
+            out.push([p_0 - offset_0, p_1 - offset_1, p_1 + offset_1]);
+        }
+        out
     }
 }

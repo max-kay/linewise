@@ -1,12 +1,18 @@
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::sync::Arc;
 use std::{fs, io::Write, path::PathBuf};
 
+use anyhow::anyhow;
 use rand::prelude::*;
+use ron::ser::{to_string_pretty, PrettyConfig};
 use serde::{Deserialize, Serialize};
 use svg::{node::element::Group, Document, Node};
 
-use crate::plt;
+use crate::quad_tree::Bounded;
 use crate::Vector;
+use crate::{plt, PIXEL_PER_CM};
 use crate::{BorrowedSegment, OwnedPolymer, PolymerRef, PolymerStorage};
 use crate::{Energy, QuadTree};
 use crate::{MyRng, Rect, Samples2d};
@@ -15,6 +21,8 @@ use crate::{CLEAR_LINE, MOVE_UP};
 mod builders;
 
 use builders::{ModelBuilder, ParamBuilder};
+
+pub const METHODS: usize = 2;
 
 #[derive(Serialize, Deserialize)]
 pub struct ModelParameters {
@@ -57,18 +65,74 @@ impl ModelParameters {
     }
 }
 
+pub struct SvgParams {
+    format: (f32, f32),
+    margins: (f32, f32),
+}
+
+// lower accepted rejected
+pub struct AcceptanceCounter([[u32; 3]; METHODS]);
+
+impl AcceptanceCounter {
+    pub const LOWER: usize = 0;
+    pub const ACCEPTED: usize = 1;
+    pub const REJECTED: usize = 2;
+    pub fn zeros() -> Self {
+        Self([[0; 3]; METHODS])
+    }
+
+    pub fn increase(&mut self, method: usize, result: usize) {
+        self.0[method][result] += 1;
+    }
+
+    pub fn update_transitions(&self, transitions: &mut [f32; METHODS]) {
+        for (rates, transition) in self.0.iter().zip(transitions.iter_mut()) {
+            let rate = rates[Self::REJECTED] as f32 / rates.iter().sum::<u32>() as f32;
+            if rate < 0.5 {
+                *transition *= 1.4;
+                // TODO:
+                if *transition > 1.0 {
+                    *transition = 1.0
+                }
+            } else if rate > 0.6 {
+                *transition /= 1.4;
+                // TODO:
+                if *transition < 0.0001 {
+                    *transition = 0.0001
+                }
+            }
+        }
+    }
+
+    pub fn to_rates(&self) -> [f32; 3] {
+        let mut out = [0.0; 3];
+        let mut tot: u32 = 0;
+        for method in self.0 {
+            tot += method.iter().sum::<u32>();
+            for i in 0..3 {
+                out[i] += method[i] as f32;
+            }
+        }
+        out.iter_mut().for_each(|val| *val /= tot as f32);
+        out
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self([[0; 3]; METHODS]);
+    }
+}
+
 pub struct Model {
     field: Samples2d<Vector>,
     potential: Samples2d<f32>,
     storage: PolymerStorage,
     polymers: QuadTree<PolymerRef>,
     params: ModelParameters,
+    svg_params: SvgParams,
     boundary: Rect,
     energies: Vec<Energy>,
-    lower_count: u32,
-    accepted_count: u32,
-    rejected_count: u32,
-    transition_scale: f32,
+    acceptance_couter: AcceptanceCounter,
+    transition_scale: [f32; METHODS],
     rates: Vec<[f32; 3]>,
     rng: MyRng,
     log_dir: PathBuf,
@@ -78,12 +142,53 @@ impl Model {
     pub fn new() -> ModelBuilder {
         ModelBuilder::default()
     }
+
+    pub fn initialize(&mut self) -> anyhow::Result<()> {
+        let mut storage = PolymerStorage::new();
+        let mut polymers: QuadTree<PolymerRef> = QuadTree::new();
+        let max_iterations = self.params.polymer_count * 100;
+        // TODO: think about the influence of this algorithm for length distr of the polymers
+        // and if I even care
+        for _ in 0..max_iterations {
+            if polymers.len() == self.params.polymer_count {
+                break;
+            }
+            let polymer = OwnedPolymer::new_random(
+                self.boundary
+                    .add_radius(-(self.params.max_segments as f32) * self.params.segment_len)
+                    .from_box_coords((self.rng.gen(), self.rng.gen())),
+                self.params.segment_len,
+                self.rng.gen_range(1..=self.params.max_segments),
+                &mut self.rng,
+            );
+            let mut intersection = false;
+            for other in polymers.query_intersects(polymer.bounding_box()) {
+                for o_segment in storage.get_borrowed_segments(other) {
+                    intersection |= polymer.intersects(&o_segment, self.params.precision)
+                }
+            }
+            if !intersection {
+                let polyref = storage.add_polymer(polymer);
+                polymers.insert(polyref);
+            }
+        }
+        if polymers.len() != self.params.polymer_count {
+            anyhow::bail!(
+                "couldn't place {} nonintersecting polymers in {} iterations",
+                self.params.polymer_count,
+                max_iterations
+            )
+        }
+        self.storage = storage;
+        self.polymers = polymers;
+        Ok(())
+    }
 }
 
 // the energy terms
 impl Model {
     fn potential_term(&self, potential_sum: &mut f32, position: Vector, der_norm: f32) {
-        if let Some(sample) = (&self.potential).get_sample(position) {
+        if let Some(sample) = self.potential.get_sample(position) {
             *potential_sum += sample * der_norm
         }
     }
@@ -97,7 +202,7 @@ impl Model {
     }
 
     fn field_term(&self, field_sum: &mut f32, position: Vector, der: Vector) {
-        if let Some(vector) = (&self.field).get_sample(position) {
+        if let Some(vector) = self.field.get_sample(position) {
             *field_sum -= der.dot(vector).abs();
         }
     }
@@ -107,17 +212,9 @@ impl Model {
         interaction_sum: &mut f32,
         position: Vector,
         der_norm: f32,
-        others_filter_condidion: &impl Fn(&PolymerRef) -> bool,
+        others: &[&PolymerRef],
     ) {
-        for other in self
-            .polymers
-            .querry_iter(|bounds| {
-                bounds
-                    .add_radius((&self.params).interaction_radius)
-                    .contains_point(position)
-            })
-            .filter(|&o| others_filter_condidion(o))
-        {
+        for other in others {
             let mut inner_sum = 0.0;
 
             for segment in self.storage.get_borrowed_segments(&other) {
@@ -134,8 +231,9 @@ impl Model {
     }
 
     fn interaction_potential(&self, dist: f32) -> f32 {
-        if dist < (&self.params).interaction_radius {
-            1.0 / dist.powi(3)
+        if dist < self.params.interaction_radius {
+            let ratio = self.params.interaction_radius / 2.0_f32.powf(1.0 / 6.0) / dist;
+            ratio.powi(12) - ratio.powi(6) - 1.0 / 4.0
         } else {
             0.0
         }
@@ -156,7 +254,7 @@ impl Model {
     pub fn calculate_energy_from_segment<'a>(
         &self,
         segment: BorrowedSegment<'_>,
-        others_filter_condidion: impl Fn(&PolymerRef) -> bool,
+        others: &[&PolymerRef],
     ) -> Energy {
         let mut length_sum = 0.0;
         let mut bending_sum = 0.0;
@@ -167,16 +265,10 @@ impl Model {
         for (position, der, der2) in segment.all_iters(self.params.precision) {
             let der_norm = der.norm();
             self.length_term(&mut length_sum, der_norm);
-            // length_sum += der_norm;
             self.bending_term(&mut bending_sum, der, der2, der_norm);
             self.potential_term(&mut potential_sum, position, der_norm);
             self.field_term(&mut field_sum, position, der);
-            self.interaction_term(
-                &mut interaction_sum,
-                position,
-                der_norm,
-                &others_filter_condidion,
-            );
+            self.interaction_term(&mut interaction_sum, position, der_norm, others);
             self.boundary_term(&mut boundary_sum, position);
         }
 
@@ -201,121 +293,178 @@ impl Model {
 
     pub fn calculate_energy_for_this(&self, polymer: &OwnedPolymer) -> Energy {
         let mut energy = Energy::zero();
+        let others = self
+            .polymers
+            .query_intersects(
+                polymer
+                    .bounding_box()
+                    .add_radius(self.params.interaction_radius),
+            )
+            .filter(|&p| *polymer == *p)
+            .collect::<Vec<&PolymerRef>>();
         for segment in polymer.get_borrowed_segments() {
-            energy += self.calculate_energy_from_segment(segment, |p| *polymer == *p)
+            energy += self.calculate_energy_from_segment(segment, &others)
         }
         energy
     }
 
     pub fn calculate_energy_for_tot(&self, polymer: &PolymerRef) -> Energy {
         let mut energy = Energy::zero();
+        let others = self
+            .polymers
+            .query_intersects(
+                polymer
+                    .bounding_box()
+                    .add_radius(self.params.interaction_radius),
+            )
+            .filter(|&p| *polymer < *p)
+            .collect::<Vec<&PolymerRef>>();
         for segment in self.storage.get_borrowed_segments(&polymer) {
-            energy += self.calculate_energy_from_segment(segment, |p| *polymer < *p)
+            energy += self.calculate_energy_from_segment(segment, &others)
         }
         energy
     }
 
-    pub fn log_energies(&mut self) {
+    pub fn calc_tot_energy(&self) -> Energy {
         let mut summed_energy = Energy::zero();
         for polymer in self.polymers.iter() {
-            summed_energy += self.calculate_energy_for_tot(polymer)
+            let res = self.calculate_energy_for_tot(polymer);
+            // assert!(res.is_finite(), "Energy was infinite at {:?}", res);
+            if !res.is_finite() {
+                println!("Energy was not finite at {:?}", res);
+            }
+
+            summed_energy += res;
         }
-        self.energies.push(summed_energy)
+        summed_energy
+    }
+
+    pub fn log_energies(&mut self) {
+        self.energies.push(self.calc_tot_energy())
     }
 }
 
 impl Model {
     pub fn take_mc_step(&mut self, temp: f32) {
-        let old = self.storage.read(self.polymers.pop_random(&mut self.rng));
-        let new = old.vary(self.transition_scale, &mut self.rng);
+        let mut polymer = self.storage.read(self.polymers.pop_random(&mut self.rng));
+        let e_0 = self.calculate_energy_for_this(&polymer).sum();
 
-        let e_0 = self.calculate_energy_for_this(&old).sum();
-        let e_1 = self.calculate_energy_for_this(&new).sum();
+        let method = polymer.vary(self.transition_scale, &mut self.rng);
+        let e_1 = self.calculate_energy_for_this(&polymer).sum();
+
         let d_e = e_1 - e_0;
 
         if d_e < 0.0 {
-            self.lower_count += 1;
-            let this_ref = self.storage.overwrite_polymer(new);
-            self.polymers.insert(this_ref);
+            self.acceptance_couter
+                .increase(method, AcceptanceCounter::LOWER);
+            self.polymers
+                .insert(self.storage.overwrite_polymer(polymer));
         } else if self.rng.gen::<f32>() < (-d_e / temp).exp() {
-            self.accepted_count += 1;
-            let this_ref = self.storage.overwrite_polymer(new);
-            self.polymers.insert(this_ref)
+            self.acceptance_couter
+                .increase(method, AcceptanceCounter::ACCEPTED);
+            self.polymers
+                .insert(self.storage.overwrite_polymer(polymer))
         } else {
-            self.rejected_count += 1;
-            let this_ref = self.storage.revalidate_ref(old);
-            self.polymers.insert(this_ref)
+            self.acceptance_couter
+                .increase(method, AcceptanceCounter::REJECTED);
+            self.polymers.insert(self.storage.revalidate_ref(polymer))
         }
     }
 
-    pub fn make_mc_sweep(&mut self, temp: f32) {
-        for _ in 0..self.polymers.len() {
-            self.take_mc_step(temp);
-        }
-    }
+    pub fn run_at_temp(
+        &mut self,
+        temp: f32,
+        tx: Option<&Sender<PolymerStorage>>,
+    ) -> anyhow::Result<()> {
+        self.clear_logs();
 
-    pub fn run(&mut self, format: (f32, f32), margin: f32) -> anyhow::Result<()> {
-        if self.params.save_start_svg {
-            self.save_svg_doc("img_start.svg", format, margin)?
-        }
-
-        for (i, temp) in self.params.get_temps().into_iter().enumerate() {
-            println!(
-                "Model running at temp = {} | {}/{}",
-                temp,
-                i + 1,
-                self.params.temp_steps
+        for j in 1..=self.params.sweeps_per_temp {
+            print!(
+                "{}running sweep {}/{}",
+                CLEAR_LINE, j, self.params.sweeps_per_temp
             );
             std::io::stdout().flush()?;
-            self.clear_logs();
-            for j in 1..=self.params.sweeps_per_temp {
-                // TODO: dynamically adjust movement of polymers when total_acceptance_rate !~= 0.5
-                if j % 50 == 0 {
-                    print!(
-                        "{}running {}/{}",
-                        CLEAR_LINE, j, self.params.sweeps_per_temp
-                    );
-                    std::io::stdout().flush()?;
-                }
-                self.make_mc_sweep(temp);
-                // TODO: should this be part of parameters?
-                if (self.rejected_count as f32 / self.polymers.len() as f32) < 0.5 {
-                    self.transition_scale *= 1.4;
-                }
-                if (self.rejected_count as f32 / self.polymers.len() as f32) > 0.6 {
-                    self.transition_scale /= 1.4;
-                }
-                self.rates.push([
-                    self.lower_count as f32 / self.polymers.len() as f32,
-                    self.accepted_count as f32 / self.polymers.len() as f32,
-                    self.rejected_count as f32 / self.polymers.len() as f32,
-                ]);
-                self.lower_count = 0;
-                self.accepted_count = 0;
-                self.rejected_count = 0;
+
+            for _ in 0..self.polymers.len() {
+                self.take_mc_step(temp);
+            }
+
+            if let Some(tx) = tx {
+                tx.send(self.storage.clone())?
+            }
+
+            self.acceptance_couter
+                .update_transitions(&mut self.transition_scale);
+
+            self.rates.push(self.acceptance_couter.to_rates());
+            self.acceptance_couter.clear();
+
+            if self.params.make_plots {
                 self.log_energies()
             }
-            print!("{}", CLEAR_LINE);
-            std::io::stdout().flush()?;
-            if self.params.make_plots {
-                self.make_all_plots(&format!("Temp {}", temp), &format!("{}", i))?;
-            }
-            if self.params.save_step_svg {
-                self.save_svg_doc(&format!("img_{}_{}.svg", i, temp), format, margin)?;
-            }
-            print!("{}{}", MOVE_UP, CLEAR_LINE);
-            std::io::stdout().flush()?;
         }
-        if self.params.save_end_svg && !self.params.save_step_svg {
-            self.save_svg_doc("img_end.svg", format, margin)?;
-        }
+
+        println!("{}", CLEAR_LINE);
+        Ok(())
+    }
+
+    pub fn run(
+        &mut self,
+        display_opts: Option<(Sender<PolymerStorage>, Arc<AtomicBool>)>,
+    ) -> anyhow::Result<()> {
         if self.params.save_parameters {
             let path = self.log_dir.join("parameters.ron");
             fs::write(
                 path,
-                ron::ser::to_string_pretty(&self.params, ron::ser::PrettyConfig::default())?,
+                to_string_pretty(&self.params, PrettyConfig::default())?,
             )?
         }
+
+        self.initialize()?;
+
+        if let Some((tx, _)) = &display_opts {
+            tx.send(self.storage.clone())?
+        }
+
+        if self.params.save_start_svg {
+            self.save_svg_doc("img_start.svg")?
+        }
+        anyhow::ensure!(
+            self.calc_tot_energy().is_finite(),
+            "initial energy needs to be finite"
+        );
+
+        for (i, temp) in self.params.get_temps().into_iter().enumerate() {
+            println!(
+                "Model running at Temperature: {} {}/{}",
+                temp,
+                i + 1,
+                self.params.temp_steps
+            );
+            self.run_at_temp(temp, display_opts.as_ref().map(|(tx, _)| tx))?;
+
+            if self.params.make_plots {
+                self.make_all_plots(&format!("Temp {}", temp), &format!("{}", i))?;
+            }
+
+            if self.params.save_step_svg {
+                self.save_svg_doc(&format!("img_{}_{}.svg", i, temp))?;
+            }
+            print!("{}{}", MOVE_UP, CLEAR_LINE);
+            std::io::stdout().flush()?;
+            if let Some((_, stop_flag)) = display_opts.as_ref() {
+                if stop_flag.load(Ordering::Relaxed) {
+                    if self.params.save_end_svg && !self.params.save_step_svg {
+                        self.save_svg_doc("img_end.svg")?;
+                    }
+                    return Err(anyhow!("Stopped running"));
+                }
+            }
+        }
+        if self.params.save_end_svg && !self.params.save_step_svg {
+            self.save_svg_doc("img_end.svg")?;
+        }
+
         println!("Finished Running");
         Ok(())
     }
@@ -326,12 +475,19 @@ impl Model {
         self.polymers.len()
     }
 
+    pub fn get_bounds(&self) -> Rect {
+        self.boundary
+    }
+
     pub fn clear_logs(&mut self) {
         self.energies = Vec::new();
         self.rates = Vec::new();
     }
 
     const LINE_WIDTH_FACTOR: f32 = 0.1;
+    pub fn calc_linewidth(&self) -> f32 {
+        Self::LINE_WIDTH_FACTOR * self.params.segment_len
+    }
     pub fn make_svg_group(&self) -> (Group, Rect) {
         let mut group = Group::new();
         let mut polymers = Group::new();
@@ -349,38 +505,27 @@ impl Model {
         (group, self.boundary)
     }
 
-    pub fn make_svg_doc(&self, format: (f32, f32), margin: f32) -> Document {
-        let mut doc = Document::new().set("viewBox", (0, 0, format.0, format.1));
-        // // for debuging
-        // doc.append(
-        //     Rect::new(0.0, format.0, 0.0, format.1)
-        //         .as_svg(0.0)
-        //         .set("fill", "gray")
-        //         .set("stroke", "none"),
-        // );
-
+    pub fn make_svg_doc(&self) -> Document {
+        let mut doc = Document::new()
+            .set("width", format!("{}cm", self.svg_params.format.0))
+            .set("height", format!("{}cm", self.svg_params.format.1));
         let (group, rect) = self.make_svg_group();
-        let scale = ((format.0 - 2.0 * margin) / rect.width())
-            .min((format.1 - 2.0 * margin) / rect.height());
+        let scale = ((self.svg_params.format.0 - 2.0 * self.svg_params.margins.0) / rect.width())
+            .min((self.svg_params.format.1 - 2.0 * self.svg_params.margins.1) / rect.height());
         doc.append(group.set(
             "transform",
             format!(
                 "translate({} {}) scale({})",
-                (format.0 - rect.width() * scale) / 2.0,
-                (format.1 - rect.height() * scale) / 2.0,
-                scale
+                (self.svg_params.format.0 - rect.width() * scale) / 2.0 * PIXEL_PER_CM,
+                (self.svg_params.format.1 - rect.height() * scale) / 2.0 * PIXEL_PER_CM,
+                scale * PIXEL_PER_CM
             ),
         ));
         doc
     }
 
-    pub fn save_svg_doc(
-        &self,
-        path: impl AsRef<Path>,
-        format: (f32, f32),
-        margin: f32,
-    ) -> std::io::Result<()> {
-        svg::save(self.log_dir.join(path), &self.make_svg_doc(format, margin))
+    pub fn save_svg_doc(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
+        svg::save(self.log_dir.join(path), &self.make_svg_doc())
     }
 
     pub fn make_all_plots(&self, caption: &str, name: &str) -> anyhow::Result<()> {

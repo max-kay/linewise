@@ -5,9 +5,9 @@ use convolve2d::{convolve2d, kernel};
 use image::DynamicImage;
 use rand::prelude::*;
 
-use super::{Model, ModelParameters};
+use super::{AcceptanceCounter, Model, ModelParameters, SvgParams, METHODS};
 use crate::energy::Energy;
-use crate::polymer::{OwnedPolymer, PolymerStorage};
+use crate::polymer::PolymerStorage;
 use crate::quad_tree::{QuadTree, Rect};
 use crate::sampler::Samples2d;
 use crate::utils;
@@ -15,20 +15,23 @@ use crate::MyRng;
 use crate::Vector;
 
 pub struct ParamBuilder {
-    polymer_count: Option<usize>,
     segment_len: Option<f32>,
     max_segments: Option<usize>,
+    polymer_count: Option<usize>,
     interaction_radius: Option<f32>,
+
     energy_factors: Option<Energy>,
+
     precision: Option<usize>,
     temp_range: Option<(f32, f32)>,
     temp_steps: Option<usize>,
     sweeps_per_temp: Option<usize>,
-    make_plots: bool,
+
     save_parameters: bool,
     save_start_svg: bool,
     save_step_svg: bool,
     save_end_svg: bool,
+    make_plots: bool,
 }
 
 impl ParamBuilder {
@@ -42,20 +45,23 @@ impl ParamBuilder {
             boundary_energy: 0.0001,
         };
         ModelParameters {
+            interaction_radius: self.interaction_radius.unwrap_or(0.01),
             polymer_count: self.polymer_count.unwrap_or(900),
             segment_len: self.segment_len.unwrap_or(0.03),
             max_segments: self.max_segments.unwrap_or(4),
-            interaction_radius: self.interaction_radius.unwrap_or(0.01),
+
             energy_factors: self.energy_factors.unwrap_or(default_energy),
-            precision: self.precision.unwrap_or(12),
             temp_range: self.temp_range.unwrap_or((1.0, 0.005)),
+
+            precision: self.precision.unwrap_or(12),
             temp_steps: self.temp_steps.unwrap_or(10),
             sweeps_per_temp: self.sweeps_per_temp.unwrap_or(150),
-            make_plots: self.make_plots,
+
             save_parameters: self.save_parameters,
             save_start_svg: self.save_start_svg,
             save_step_svg: self.save_step_svg,
             save_end_svg: self.save_end_svg,
+            make_plots: self.make_plots,
         }
     }
     pub fn polymer_count(mut self, polymer_count: usize) -> Self {
@@ -160,6 +166,7 @@ pub struct ModelBuilder {
     field: Option<Samples2d<Vector>>,
     potential: Option<Samples2d<f32>>,
     params: Option<ModelParameters>,
+    svg_params: Option<SvgParams>,
     log_dir: Option<PathBuf>,
     aspect_ratio: Option<f32>,
 }
@@ -257,27 +264,17 @@ impl ModelBuilder {
         self
     }
 
+    pub fn add_svg_params(mut self, params: SvgParams) -> Self {
+        self.svg_params = Some(params);
+        self
+    }
+
     pub fn build(self) -> Model {
         let params = self.params.unwrap_or(ModelParameters::new().build());
         let aspect = self.aspect_ratio.unwrap_or(1.0);
         let boundary = Rect::new(0.0, aspect.sqrt(), 0.0, 1.0 / aspect.sqrt());
-        let mut rng = MyRng::from_rng(thread_rng()).unwrap();
+        let rng = MyRng::from_rng(thread_rng()).unwrap();
 
-        let mut storage = PolymerStorage::new();
-        let mut polymers = Vec::new();
-        for _ in 0..params.polymer_count {
-            let spline = OwnedPolymer::new_random(
-                boundary
-                    .add_radius(-0.15)
-                    .from_box_coords((rng.gen(), rng.gen())),
-                params.segment_len,
-                rng.gen_range(1..=params.max_segments),
-                &mut rng,
-            );
-
-            polymers.push(storage.add_polymer(spline));
-        }
-        let polymers = QuadTree::new(polymers);
         let log_dir = self.log_dir.unwrap_or_else(|| {
             Path::new("out").join(Utc::now().format("%Y-%m-%d_%H-%M").to_string())
         });
@@ -293,15 +290,21 @@ impl ModelBuilder {
             potential: self
                 .potential
                 .unwrap_or(Samples2d::new_filled(0.0, 1, 1, boundary)),
-            polymers,
-            storage,
+            polymers: QuadTree::new(),
+            storage: PolymerStorage::new(),
             params,
+            svg_params: self.svg_params.unwrap_or(SvgParams {
+                format: (
+                    // with aspect = 1/sqrt(2) this is a4
+                    100.0 / 4.0 * aspect.sqrt(),
+                    100.0 / 4.0 / aspect.sqrt(),
+                ),
+                margins: (1.2, 1.2),
+            }),
             boundary,
             energies: Vec::new(),
-            lower_count: 0,
-            accepted_count: 0,
-            rejected_count: 0,
-            transition_scale: 0.005,
+            acceptance_couter: AcceptanceCounter::zeros(),
+            transition_scale: [0.005; METHODS],
             rates: Vec::new(),
             rng,
             log_dir,
@@ -315,6 +318,7 @@ impl Default for ModelBuilder {
             field: None,
             potential: None,
             params: None,
+            svg_params: None,
             aspect_ratio: None,
             log_dir: None,
         }

@@ -45,12 +45,13 @@ impl Energy {
     }
 
     pub fn sum(&self) -> f32 {
-        self.strain_energy
-            + self.bending_energy
-            + self.potential_energy
-            + self.field_energy
-            + self.interaction_energy
-            + self.boundary_energy
+        self.as_array().iter().sum()
+    }
+
+    pub fn is_finite(&self) -> bool {
+        self.as_array()
+            .iter()
+            .fold(true, |acc, f| acc && f.is_finite())
     }
 }
 

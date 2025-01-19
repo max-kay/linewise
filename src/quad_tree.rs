@@ -3,7 +3,7 @@ use rand::Rng;
 
 use crate::MyRng;
 
-const OBJECTS_ON_LEAVES: usize = 6;
+const OBJECTS_ON_LEAVES: usize = 8;
 
 mod iter;
 mod rect;
@@ -18,8 +18,8 @@ pub struct QuadTree<T: Bounded> {
     len: usize,
 }
 
-impl<T: Bounded> QuadTree<T> {
-    pub fn new(objects: Vec<T>) -> Self {
+impl<T: Bounded> From<Vec<T>> for QuadTree<T> {
+    fn from(objects: Vec<T>) -> Self {
         let len = objects.len();
         let bounds = objects
             .iter()
@@ -29,6 +29,15 @@ impl<T: Bounded> QuadTree<T> {
         Self {
             root: Node::new(objects, bounds),
             len,
+        }
+    }
+}
+
+impl<T: Bounded> QuadTree<T> {
+    pub fn new() -> Self {
+        Self {
+            root: Node::new_placeholder(),
+            len: 0,
         }
     }
 
@@ -45,6 +54,11 @@ impl<T: Bounded> QuadTree<T> {
     }
 
     pub fn insert(&mut self, val: T) {
+        if self.len == 0 {
+            self.len += 1;
+            self.root = Node::from_single(val);
+            return;
+        }
         if self.root.bounds.contains(&val.bounding_box()) {
             self.len += 1;
             self.root.insert(val);
@@ -70,11 +84,6 @@ impl<T: Bounded> QuadTree<T> {
     }
 }
 
-impl<T: Bounded> From<Vec<T>> for QuadTree<T> {
-    fn from(value: Vec<T>) -> Self {
-        Self::new(value)
-    }
-}
 impl<T: Bounded> Into<Vec<T>> for QuadTree<T> {
     fn into(self) -> Vec<T> {
         self.root.into()
@@ -125,6 +134,14 @@ impl<T: Bounded> Node<T> {
             bounds,
             objects: remaining,
             children: Some(children),
+        }
+    }
+
+    fn from_single(val: T) -> Self {
+        Self {
+            bounds: val.bounding_box(),
+            objects: vec![val],
+            children: None,
         }
     }
 

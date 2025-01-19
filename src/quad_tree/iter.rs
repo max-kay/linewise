@@ -1,4 +1,26 @@
+use crate::Vector;
+
 use super::{Bounded, Node, Rect};
+
+pub trait Query {
+    fn predicate(&self, bounds: Rect) -> bool;
+}
+
+pub struct IntersectsRect(Rect);
+
+impl Query for IntersectsRect {
+    fn predicate(&self, bounds: Rect) -> bool {
+        bounds.intersects(&self.0)
+    }
+}
+
+pub struct ContainsPoint(Vector);
+
+impl Query for ContainsPoint {
+    fn predicate(&self, bounds: Rect) -> bool {
+        bounds.contains_point(self.0)
+    }
+}
 
 pub struct IntoIter<T: Bounded> {
     pub(super) stack: Vec<Node<T>>,
@@ -96,38 +118,41 @@ impl<'a, T: Bounded> IntoIterator for &'a super::QuadTree<T> {
     }
 }
 
-#[derive(Clone)]
-pub struct QuerryIter<'a, T, F>
+pub struct QueryIter<'a, T, Q>
 where
     T: Bounded,
-    F: Fn(Rect) -> bool,
+    Q: Query,
 {
     pub(super) stack: Vec<&'a Node<T>>,
-    pub(super) predicate: F,
+    pub(super) query: Q,
     pub(super) index: usize,
 }
 
 impl<T: Bounded> super::QuadTree<T> {
     /// returns an iterator over all elements for which func(element.bounding_box()) is true
-    pub fn querry_iter<F: Fn(Rect) -> bool>(&self, func: F) -> QuerryIter<'_, T, F> {
+    pub fn query_iter<Q: Query>(&self, query: Q) -> QueryIter<'_, T, Q> {
         let mut stack = Vec::new();
         stack.push(&self.root);
-        QuerryIter {
+        QueryIter {
             stack,
-            predicate: func,
+            query,
             index: 0,
         }
     }
 
-    pub fn query_intersects(&self, bounds: Rect) -> QuerryIter<T, impl Fn(Rect) -> bool> {
-        self.querry_iter(move |rect| rect.intersects(&bounds))
+    pub fn query_contains_point(&self, point: Vector) -> QueryIter<T, ContainsPoint> {
+        self.query_iter(ContainsPoint(point))
+    }
+
+    pub fn query_intersects(&self, bounds: Rect) -> QueryIter<T, IntersectsRect> {
+        self.query_iter(IntersectsRect(bounds))
     }
 }
 
-impl<'a, T, F> Iterator for QuerryIter<'a, T, F>
+impl<'a, T, F> Iterator for QueryIter<'a, T, F>
 where
     T: Bounded,
-    F: Fn(Rect) -> bool,
+    F: Query,
 {
     type Item = &'a T;
 
@@ -142,7 +167,7 @@ where
             // this fails if all objects still in the vec do not fullfill the predicate
             while let Some(item) = current_node.objects.get(self.index) {
                 self.index += 1; // setup to get next item
-                if (self.predicate)(item.bounding_box()) {
+                if self.query.predicate(item.bounding_box()) {
                     return Some(item);
                 }
             }
@@ -153,7 +178,7 @@ where
         // if the empty node has children push them on the stack
         if let Some(children) = &empty_node.children {
             for child in children {
-                if (self.predicate)(child.bounds) {
+                if self.query.predicate(child.bounds) {
                     self.stack.push(&child)
                 }
             }

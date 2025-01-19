@@ -21,6 +21,7 @@ pub type MyRng = Xoshiro512StarStar;
 
 const CLEAR_LINE: &'static str = "\x1B[2K\r";
 const MOVE_UP: &'static str = "\x1B[A\r";
+const PIXEL_PER_CM: f32 = 37.795275591;
 
 pub type Vector = Vector2<f32>;
 pub type Rotation = Rotation2<f32>;

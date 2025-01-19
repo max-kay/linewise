@@ -23,7 +23,14 @@ impl Default for Rect {
 
 impl Rect {
     pub fn new(x_min: f32, x_max: f32, y_min: f32, y_max: f32) -> Self {
-        assert!(x_min <= x_max && y_min <= y_max);
+        assert!(
+            x_min <= x_max && y_min <= y_max,
+            "with x: {} {} and y: {} {}",
+            x_min,
+            x_max,
+            y_min,
+            y_max
+        );
         Self {
             x_min,
             x_max,

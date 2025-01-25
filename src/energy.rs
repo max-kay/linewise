@@ -12,6 +12,12 @@ pub struct Energy {
     pub boundary_energy: f32,
 }
 
+impl Default for Energy {
+    fn default() -> Self {
+        Self::zero()
+    }
+}
+
 impl Energy {
     pub const NAMES: [&'static str; 6] = [
         "strain",

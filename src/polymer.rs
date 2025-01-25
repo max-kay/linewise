@@ -155,7 +155,6 @@ impl PolymerStorage {
                     .next()
                     .cloned()
                     .unwrap_or(self.points_and_vecs.len());
-
                 continue;
             }
             let p1 = self.points_and_vecs[segment_start] + self.points_and_vecs[segment_start + 1];
@@ -336,7 +335,14 @@ impl OwnedPolymer {
         match method {
             0 => self.translate(gaussian_vector(rng) * transition_scale[0]),
             1 => self.rotate((rng.gen::<f32>() - 0.5) * transition_scale[1] * TAU),
-            _ => unreachable!(),
+            2 => self.rotate_segment(
+                rng.gen_range(0..self.count_segments()),
+                (rng.gen::<f32>() - 0.5) * transition_scale[2] * TAU,
+            ),
+            3 => self.scales_vecs(1.0 - (rng.gen::<f32>() - 0.5) * 2.0 * transition_scale[3]),
+            4 => self.scales_vecs_random(transition_scale[4], rng),
+            5 => self.stretch(1.0 - (rng.gen::<f32>() - 0.5) * 2.0 * transition_scale[5] / 1.0),
+            METHODS.. => unreachable!(),
         }
         method
     }
@@ -370,6 +376,39 @@ impl OwnedPolymer {
             "rotate({})",
             radians
         );
+        self.update_bounds();
+    }
+
+    pub fn rotate_segment(&mut self, segment: usize, radians: f32) {
+        if let [p0, v0, p1, v1] = &mut self.points_and_vecs[2 * segment..2 * segment + 4] {
+            let mid_point = (*p0 + *p1) / 2.0;
+            *p0 = Rotation::new(radians) * (*p0 - mid_point) + mid_point;
+            *p1 = Rotation::new(radians) * (*p1 - mid_point) + mid_point;
+            *v0 = Rotation::new(radians / 2.0) * *v0;
+            *v1 = Rotation::new(radians / 2.0) * *v1;
+        } else {
+            unreachable!()
+        }
+        self.update_bounds();
+    }
+
+    pub fn scales_vecs(&mut self, factor: f32) {
+        self.vecs_mut().for_each(|vec| *vec = factor * *vec);
+        self.update_bounds();
+    }
+
+    pub fn scales_vecs_random(&mut self, factor: f32, rng: &mut MyRng) {
+        self.vecs_mut()
+            .for_each(|vec| *vec = (rng.gen::<f32>() - 0.5) * 2.0 * factor * *vec);
+        self.update_bounds();
+    }
+
+    pub fn stretch(&mut self, factor: f32) {
+        let origin =
+            (self.points_and_vecs[0] + self.points_and_vecs[self.points_and_vecs.len() - 2]) / 2.0;
+        self.points_mut()
+            .for_each(|point| *point = factor * (*point - origin) + origin);
+        self.vecs_mut().for_each(|vec| *vec = *vec * factor);
         self.update_bounds();
     }
 
@@ -468,6 +507,10 @@ impl BorrowedSegment<'_> {
     pub fn derivative2_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
         let coord_matrix = self.get_coord_matrix_2();
         Self::s_iter(steps).map(move |s| 6.0 * coord_matrix * Self::get_bernstein_1(s))
+    }
+
+    pub fn pos_and_der_iter(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector)> {
+        self.position_iter(steps).zip(self.derivative_iter(steps))
     }
 
     pub fn all_iters(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector, Vector)> {

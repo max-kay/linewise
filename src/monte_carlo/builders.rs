@@ -5,7 +5,7 @@ use convolve2d::{convolve2d, kernel};
 use image::DynamicImage;
 use rand::prelude::*;
 
-use super::{AcceptanceCounter, Model, ModelParameters, SvgParams, METHODS};
+use super::{AcceptanceCounter, Model, ModelParameters, SvgParams, TransitionScales, METHODS};
 use crate::energy::Energy;
 use crate::polymer::PolymerStorage;
 use crate::quad_tree::{QuadTree, Rect};
@@ -304,7 +304,7 @@ impl ModelBuilder {
             boundary,
             energies: Vec::new(),
             acceptance_couter: AcceptanceCounter::zeros(),
-            transition_scale: [0.005; METHODS],
+            transition_scales: TransitionScales([0.005; METHODS]),
             rates: Vec::new(),
             rng,
             log_dir,

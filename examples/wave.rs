@@ -3,8 +3,6 @@ use nalgebra::Rotation2;
 
 pub const A4: (f32, f32) = (2480.0, 3508.0);
 fn main() -> anyhow::Result<()> {
-    let format = A4;
-
     let center = Vector::new(A4.0 / 2.0, A4.1 / 2.0);
 
     let potential = |pos: Vector| -> f32 { ((pos - center).norm() / 100.0).sin().powi(2) };
@@ -31,18 +29,19 @@ fn main() -> anyhow::Result<()> {
         .segment_len(0.01)
         .max_segments(5)
         .polymer_count(500)
-        .sweeps_per_temp(40)
+        .unset_make_plots()
+        .sweeps_per_temp(400)
         .energy_factors(energy_factors)
-        .interaction_radius(0.1)
+        .interaction_radius(0.3)
         .precision(30)
-        .temp_steps(12)
+        .temp_steps(2)
         .set_save_start_svg()
         .set_save_step_svg()
         .build();
-    let mut model = Model::new()
+    let model = Model::new()
         .field_from_fn(field, bounds, (2000, 2000))
         .potential_from_fn(potential, bounds, (2000, 2000))
         .add_params(parameters)
         .build();
-    model.run(format, 20.0)
+    model.run(None)
 }

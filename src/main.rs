@@ -26,24 +26,25 @@ fn main() -> anyhow::Result<()> {
         .interaction_radius(0.02)
         .max_segments(8)
         .polymer_count(1000)
-        .sweeps_per_temp(100)
+        .sweeps_per_temp(500)
         .energy_factors(default_energy)
         .temp_steps(12)
+        .precision(30)
         .unset_make_plots()
         .set_save_start_svg()
         .set_save_step_svg()
         .build();
-    let mut model = Model::new()
+    let model = Model::new()
         .add_samples_from_img(img)
         .add_params(parameters)
         .build();
 
-    // run_in_window(model);
-    model.run(None)?;
+    run_in_window(model);
+    // model.run(None)?;
     Ok(())
 }
 
-fn run_in_window(mut model: Model) {
+fn run_in_window(model: Model) {
     let bounds = model.get_bounds();
     let line_width = model.calc_linewidth();
     let (tx, rx) = mpsc::channel();

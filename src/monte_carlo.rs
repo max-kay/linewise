@@ -1,3 +1,4 @@
+use std::fmt::Display;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
@@ -22,7 +23,7 @@ mod builders;
 
 use builders::{ModelBuilder, ParamBuilder};
 
-pub const METHODS: usize = 2;
+pub const METHODS: usize = 6;
 
 #[derive(Serialize, Deserialize)]
 pub struct ModelParameters {
@@ -85,21 +86,13 @@ impl AcceptanceCounter {
         self.0[method][result] += 1;
     }
 
-    pub fn update_transitions(&self, transitions: &mut [f32; METHODS]) {
-        for (rates, transition) in self.0.iter().zip(transitions.iter_mut()) {
+    pub fn update_transitions(&self, transitions: &mut TransitionScales) {
+        for (rates, transition) in self.0.iter().zip(transitions.0.iter_mut()) {
             let rate = rates[Self::REJECTED] as f32 / rates.iter().sum::<u32>() as f32;
             if rate < 0.5 {
-                *transition *= 1.4;
-                // TODO:
-                if *transition > 1.0 {
-                    *transition = 1.0
-                }
+                *transition = (*transition * 1.4).min(1.0);
             } else if rate > 0.6 {
-                *transition /= 1.4;
-                // TODO:
-                if *transition < 0.0001 {
-                    *transition = 0.0001
-                }
+                *transition = (*transition / 1.4).max(0.0001);
             }
         }
     }
@@ -122,6 +115,19 @@ impl AcceptanceCounter {
     }
 }
 
+#[derive(Debug)]
+pub struct TransitionScales([f32; METHODS]);
+
+impl Display for TransitionScales {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut string = String::new();
+        for value in self.0 {
+            string = format!("{} {:.4}", string, value)
+        }
+        write!(f, "[{}]", &string[1..])
+    }
+}
+
 pub struct Model {
     field: Samples2d<Vector>,
     potential: Samples2d<f32>,
@@ -132,7 +138,7 @@ pub struct Model {
     boundary: Rect,
     energies: Vec<Energy>,
     acceptance_couter: AcceptanceCounter,
-    transition_scale: [f32; METHODS],
+    transition_scales: TransitionScales,
     rates: Vec<[f32; 3]>,
     rng: MyRng,
     log_dir: PathBuf,
@@ -185,6 +191,26 @@ impl Model {
     }
 }
 
+impl Model {
+    fn print_sweep_status(&self, sweep: usize) -> anyhow::Result<()> {
+        print!(
+            "{}running sweep {:>3}/{}    transition_scales: {}",
+            CLEAR_LINE, sweep, self.params.sweeps_per_temp, self.transition_scales
+        );
+        std::io::stdout().flush()?;
+        Ok(())
+    }
+
+    fn print_temp_status(&self, step: usize, temp: f32) -> anyhow::Result<()> {
+        println!(
+            "{}{}{}running at temperature {:.3}   step {}/{:>2}",
+            CLEAR_LINE, MOVE_UP, CLEAR_LINE, temp, step, self.params.temp_steps
+        );
+        std::io::stdout().flush()?;
+        Ok(())
+    }
+}
+
 // the energy terms
 impl Model {
     fn potential_term(&self, potential_sum: &mut f32, position: Vector, der_norm: f32) {
@@ -204,29 +230,6 @@ impl Model {
     fn field_term(&self, field_sum: &mut f32, position: Vector, der: Vector) {
         if let Some(vector) = self.field.get_sample(position) {
             *field_sum -= der.dot(vector).abs();
-        }
-    }
-
-    fn interaction_term(
-        &self,
-        interaction_sum: &mut f32,
-        position: Vector,
-        der_norm: f32,
-        others: &[&PolymerRef],
-    ) {
-        for other in others {
-            let mut inner_sum = 0.0;
-
-            for segment in self.storage.get_borrowed_segments(&other) {
-                for (pos, other_der) in segment
-                    .position_iter(self.params.precision)
-                    .zip(segment.derivative_iter(self.params.precision))
-                {
-                    let dist = (pos - position).norm();
-                    inner_sum += self.interaction_potential(dist) * other_der.norm();
-                }
-            }
-            *interaction_sum += inner_sum * der_norm;
         }
     }
 
@@ -251,16 +254,11 @@ impl Model {
 
 // energy calculation methods
 impl Model {
-    pub fn calculate_energy_from_segment<'a>(
-        &self,
-        segment: BorrowedSegment<'_>,
-        others: &[&PolymerRef],
-    ) -> Energy {
+    pub fn calculate_energy_from_segment<'a>(&self, segment: BorrowedSegment<'_>) -> Energy {
         let mut length_sum = 0.0;
         let mut bending_sum = 0.0;
         let mut potential_sum = 0.0;
         let mut field_sum = 0.0;
-        let mut interaction_sum = 0.0;
         let mut boundary_sum = 0.0;
         for (position, der, der2) in segment.all_iters(self.params.precision) {
             let der_norm = der.norm();
@@ -268,7 +266,6 @@ impl Model {
             self.bending_term(&mut bending_sum, der, der2, der_norm);
             self.potential_term(&mut potential_sum, position, der_norm);
             self.field_term(&mut field_sum, position, der);
-            self.interaction_term(&mut interaction_sum, position, der_norm, others);
             self.boundary_term(&mut boundary_sum, position);
         }
 
@@ -284,8 +281,7 @@ impl Model {
                 / self.params.precision as f32,
             field_energy: self.params.energy_factors.field_energy * field_sum
                 / self.params.precision as f32,
-            interaction_energy: self.params.energy_factors.interaction_energy * interaction_sum
-                / (self.params.precision * self.params.precision) as f32,
+            interaction_energy: 0.0,
             boundary_energy: self.params.energy_factors.boundary_energy * boundary_sum
                 / self.params.precision as f32,
         }
@@ -293,7 +289,11 @@ impl Model {
 
     pub fn calculate_energy_for_this(&self, polymer: &OwnedPolymer) -> Energy {
         let mut energy = Energy::zero();
-        let others = self
+        for segment in polymer.get_borrowed_segments() {
+            energy += self.calculate_energy_from_segment(segment)
+        }
+        let mut interaction_sum = 0.0;
+        for other in self
             .polymers
             .query_intersects(
                 polymer
@@ -301,16 +301,34 @@ impl Model {
                     .add_radius(self.params.interaction_radius),
             )
             .filter(|&p| *polymer == *p)
-            .collect::<Vec<&PolymerRef>>();
-        for segment in polymer.get_borrowed_segments() {
-            energy += self.calculate_energy_from_segment(segment, &others)
+            .collect::<Vec<&PolymerRef>>()
+        {
+            for other_segment in self.storage.get_borrowed_segments(other) {
+                for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
+                    let mut inner_sum = 0.0;
+                    for my_segment in polymer.get_borrowed_segments() {
+                        for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
+                            inner_sum +=
+                                self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
+                        }
+                    }
+                    interaction_sum += inner_sum * o_der.norm()
+                }
+            }
         }
+        energy.interaction_energy = self.params.energy_factors.interaction_energy * interaction_sum
+            / self.params.precision.pow(2) as f32;
         energy
     }
 
     pub fn calculate_energy_for_tot(&self, polymer: &PolymerRef) -> Energy {
         let mut energy = Energy::zero();
-        let others = self
+
+        for segment in self.storage.get_borrowed_segments(&polymer) {
+            energy += self.calculate_energy_from_segment(segment)
+        }
+        let mut interaction_sum = 0.0;
+        for other in self
             .polymers
             .query_intersects(
                 polymer
@@ -318,10 +336,23 @@ impl Model {
                     .add_radius(self.params.interaction_radius),
             )
             .filter(|&p| *polymer < *p)
-            .collect::<Vec<&PolymerRef>>();
-        for segment in self.storage.get_borrowed_segments(&polymer) {
-            energy += self.calculate_energy_from_segment(segment, &others)
+            .collect::<Vec<&PolymerRef>>()
+        {
+            for other_segment in self.storage.get_borrowed_segments(other) {
+                for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
+                    let mut inner_sum = 0.0;
+                    for my_segment in self.storage.get_borrowed_segments(polymer) {
+                        for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
+                            inner_sum +=
+                                self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
+                        }
+                    }
+                    interaction_sum += inner_sum * o_der.norm()
+                }
+            }
         }
+        energy.interaction_energy = self.params.energy_factors.interaction_energy * interaction_sum
+            / self.params.precision.pow(2) as f32;
         energy
     }
 
@@ -349,7 +380,8 @@ impl Model {
         let mut polymer = self.storage.read(self.polymers.pop_random(&mut self.rng));
         let e_0 = self.calculate_energy_for_this(&polymer).sum();
 
-        let method = polymer.vary(self.transition_scale, &mut self.rng);
+        let method = polymer.vary(self.transition_scales.0, &mut self.rng);
+
         let e_1 = self.calculate_energy_for_this(&polymer).sum();
 
         let d_e = e_1 - e_0;
@@ -379,12 +411,7 @@ impl Model {
         self.clear_logs();
 
         for j in 1..=self.params.sweeps_per_temp {
-            print!(
-                "{}running sweep {}/{}",
-                CLEAR_LINE, j, self.params.sweeps_per_temp
-            );
-            std::io::stdout().flush()?;
-
+            self.print_sweep_status(j)?;
             for _ in 0..self.polymers.len() {
                 self.take_mc_step(temp);
             }
@@ -394,7 +421,7 @@ impl Model {
             }
 
             self.acceptance_couter
-                .update_transitions(&mut self.transition_scale);
+                .update_transitions(&mut self.transition_scales);
 
             self.rates.push(self.acceptance_couter.to_rates());
             self.acceptance_couter.clear();
@@ -403,13 +430,11 @@ impl Model {
                 self.log_energies()
             }
         }
-
-        println!("{}", CLEAR_LINE);
         Ok(())
     }
 
     pub fn run(
-        &mut self,
+        mut self,
         display_opts: Option<(Sender<PolymerStorage>, Arc<AtomicBool>)>,
     ) -> anyhow::Result<()> {
         if self.params.save_parameters {
@@ -435,12 +460,7 @@ impl Model {
         );
 
         for (i, temp) in self.params.get_temps().into_iter().enumerate() {
-            println!(
-                "Model running at Temperature: {} {}/{}",
-                temp,
-                i + 1,
-                self.params.temp_steps
-            );
+            self.print_temp_status(i + 1, temp)?;
             self.run_at_temp(temp, display_opts.as_ref().map(|(tx, _)| tx))?;
 
             if self.params.make_plots {
@@ -450,8 +470,6 @@ impl Model {
             if self.params.save_step_svg {
                 self.save_svg_doc(&format!("img_{}_{}.svg", i, temp))?;
             }
-            print!("{}{}", MOVE_UP, CLEAR_LINE);
-            std::io::stdout().flush()?;
             if let Some((_, stop_flag)) = display_opts.as_ref() {
                 if stop_flag.load(Ordering::Relaxed) {
                     if self.params.save_end_svg && !self.params.save_step_svg {
@@ -465,7 +483,7 @@ impl Model {
             self.save_svg_doc("img_end.svg")?;
         }
 
-        println!("Finished Running");
+        println!("\nFinished Running");
         Ok(())
     }
 }

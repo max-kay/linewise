@@ -1,0 +1,3 @@
+#!/bin/zsh
+scripts/.venv/bin/python scripts/main.py
+typst compile main.typ report.pdf

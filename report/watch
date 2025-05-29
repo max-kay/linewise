@@ -1,0 +1,18 @@
+#!/bin/zsh
+
+report_dir=${0:a:h}
+typst_path=$(which typst)
+
+if [[ -z "$typst_path" ]]; then
+    echo "Error: typst not found in PATH" >&2
+    exit 1
+fi
+
+tab_id=$(kitty @ launch\
+  --type=tab --cwd "$report_dir" --tab-title "Typst & Python Watch"\
+  --keep-focus zsh -c "scripts/.venv/bin/python scripts/main.py watch")
+
+kitty @ launch\
+  --match "id:$tab_id" --cwd "$report_dir" --type=window --title "Typst Watch" \
+  --keep-focus zsh -c "$typst_path watch main.typ report.pdf" >/dev/null
+

@@ -1,0 +1,9 @@
+[package]
+name = "random"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+rand = { version = "0.9" }
+rand_xoshiro = "0.7"
+nalgebra = { version = "0.33.0", features = ["serde-serialize"] }

@@ -1,4 +1,5 @@
-use linewise::{energy::Energy, quad_tree::Rect, Model, ModelParameters, Vector};
+use common::{Energy, Vector, quad_tree::Rect};
+use monte_carlo::{Model, ModelParameters};
 use nalgebra::Rotation2;
 
 pub const A4: (f32, f32) = (2480.0, 3508.0);
@@ -42,6 +43,6 @@ fn main() -> anyhow::Result<()> {
         .field_from_fn(field, bounds, (2000, 2000))
         .potential_from_fn(potential, bounds, (2000, 2000))
         .add_params(parameters)
-        .build();
+        .build()?;
     model.run(None)
 }

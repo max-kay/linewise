@@ -1,11 +1,13 @@
 use std::io::BufReader;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 use std::{fs::File, thread};
 
+use common::energy::Energy;
 use image::ImageFormat;
-use linewise::{energy::Energy, Model, ModelParameters};
 use minifb::{Key, Window, WindowOptions};
+
+use monte_carlo::{Model, ModelParameters};
 
 fn main() -> anyhow::Result<()> {
     let file = File::open("./in/fern.jpg")?;
@@ -25,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .segment_len(0.005)
         .interaction_radius(0.02)
         .max_segments(8)
-        .polymer_count(1000)
+        .polymer_count(2000)
         .sweeps_per_temp(500)
         .energy_factors(default_energy)
         .temp_steps(12)
@@ -37,19 +39,19 @@ fn main() -> anyhow::Result<()> {
     let model = Model::new()
         .add_samples_from_img(img)
         .add_params(parameters)
-        .build();
+        .build()?;
 
-    run_in_window(model);
+    run_in_window(model)?;
     // model.run(None)?;
     Ok(())
 }
 
-fn run_in_window(model: Model) {
+fn run_in_window(model: Model) -> anyhow::Result<()> {
     let bounds = model.get_bounds();
     let line_width = model.calc_linewidth();
     let (tx, rx) = mpsc::channel();
 
-    let window_scale = 500.0;
+    let window_scale = 700.0;
     let width = (bounds.width() * window_scale) as usize;
     let height = (bounds.height() * window_scale) as usize;
     let mut window = Window::new(
@@ -57,8 +59,7 @@ fn run_in_window(model: Model) {
         width,
         height,
         WindowOptions::default(),
-    )
-    .expect("Unable to open window");
+    )?;
 
     let stop_flag = Arc::new(AtomicBool::new(false));
     let sim_flag = Arc::clone(&stop_flag);
@@ -90,5 +91,8 @@ fn run_in_window(model: Model) {
         }
     }
     stop_flag.store(true, Ordering::Relaxed);
-    let _ = sim_thread.join();
+    match sim_thread.join() {
+        Err(_) => anyhow::bail!("failed to join simulation thread"),
+        Ok(_) => Ok(()),
+    }
 }

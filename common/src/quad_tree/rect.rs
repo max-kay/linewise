@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use svg::node::element::{path::Data, Path};
+use svg::node::element::{Path, path::Data};
 
 use crate::Vector;
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]

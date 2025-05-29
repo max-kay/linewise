@@ -1,27 +1,25 @@
+use std::f32::consts::TAU;
 use std::fmt::Display;
 use std::path::Path;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
-use std::sync::Arc;
 use std::{fs, io::Write, path::PathBuf};
 
 use anyhow::anyhow;
-use rand::prelude::*;
-use ron::ser::{to_string_pretty, PrettyConfig};
+use random::{MyRng, Rng, gaussian_vector};
+use ron::ser::{PrettyConfig, to_string_pretty};
 use serde::{Deserialize, Serialize};
-use svg::{node::element::Group, Document, Node};
+use svg::{Document, Node, node::element::Group};
 
-use crate::quad_tree::Bounded;
-use crate::Vector;
-use crate::{plt, PIXEL_PER_CM};
-use crate::{BorrowedSegment, OwnedPolymer, PolymerRef, PolymerStorage};
-use crate::{Energy, QuadTree};
-use crate::{MyRng, Rect, Samples2d};
-use crate::{CLEAR_LINE, MOVE_UP};
+use common::{
+    BorrowedSegment, CLEAR_LINE, Energy, MOVE_UP, OwnedPolymer, PIXEL_PER_CM, PolymerRef,
+    PolymerStorage, QuadTree, Rect, Samples2d, Vector, plt, quad_tree::Bounded,
+};
 
-mod builders;
+mod builder;
 
-use builders::{ModelBuilder, ParamBuilder};
+use builder::{ModelBuilder, ParamBuilder};
 
 pub const METHODS: usize = 6;
 
@@ -66,6 +64,26 @@ impl ModelParameters {
     }
 }
 
+pub fn vary_polymer(
+    polymer: &mut OwnedPolymer,
+    transition_scale: [f32; METHODS],
+    rng: &mut MyRng,
+) -> usize {
+    let method = rng.random_range(0..METHODS);
+    match method {
+        0 => polymer.translate(gaussian_vector(rng) * transition_scale[0]),
+        1 => polymer.rotate((rng.random::<f32>() - 0.5) * transition_scale[1] * TAU),
+        2 => polymer.rotate_segment(
+            rng.random_range(0..polymer.count_segments()),
+            (rng.random::<f32>() - 0.5) * transition_scale[2] * TAU,
+        ),
+        3 => polymer.scales_vecs(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[3]),
+        4 => polymer.scales_vecs_random(transition_scale[4], rng),
+        5 => polymer.stretch(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[5] / 1.0),
+        METHODS.. => unreachable!(),
+    }
+    method
+}
 pub struct SvgParams {
     format: (f32, f32),
     margins: (f32, f32),
@@ -162,9 +180,9 @@ impl Model {
             let polymer = OwnedPolymer::new_random(
                 self.boundary
                     .add_radius(-(self.params.max_segments as f32) * self.params.segment_len)
-                    .from_box_coords((self.rng.gen(), self.rng.gen())),
+                    .from_box_coords((self.rng.random(), self.rng.random())),
                 self.params.segment_len,
-                self.rng.gen_range(1..=self.params.max_segments),
+                self.rng.random_range(1..=self.params.max_segments),
                 &mut self.rng,
             );
             let mut intersection = false;
@@ -380,7 +398,7 @@ impl Model {
         let mut polymer = self.storage.read(self.polymers.pop_random(&mut self.rng));
         let e_0 = self.calculate_energy_for_this(&polymer).sum();
 
-        let method = polymer.vary(self.transition_scales.0, &mut self.rng);
+        let method = vary_polymer(&mut polymer, self.transition_scales.0, &mut self.rng);
 
         let e_1 = self.calculate_energy_for_this(&polymer).sum();
 
@@ -391,7 +409,7 @@ impl Model {
                 .increase(method, AcceptanceCounter::LOWER);
             self.polymers
                 .insert(self.storage.overwrite_polymer(polymer));
-        } else if self.rng.gen::<f32>() < (-d_e / temp).exp() {
+        } else if self.rng.random::<f32>() < (-d_e / temp).exp() {
             self.acceptance_couter
                 .increase(method, AcceptanceCounter::ACCEPTED);
             self.polymers

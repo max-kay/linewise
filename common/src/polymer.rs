@@ -1,19 +1,19 @@
-use std::f32::consts::TAU;
+use std::{f32::consts::TAU, usize};
 
 use nalgebra::{Matrix2, Matrix2x3, Matrix2x4, Vector2, Vector3, Vector4};
-use rand::Rng;
+use random::{MyRng, Rng};
 use svg::node::element::{
-    path::{Command, Data, Position},
     Path,
+    path::{Command, Data, Position},
 };
 use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
 
 use crate::{
-    gaussian_vector,
-    monte_carlo::METHODS,
+    Rotation, Vector,
     quad_tree::{Bounded, Rect},
-    rand_unit, MyRng, Rotation, Vector,
 };
+
+use random::rand_unit;
 
 #[derive(Clone)]
 pub struct PolymerStorage {
@@ -39,8 +39,8 @@ impl PolymerStorage {
         let segments = polymer.count_segments();
         self.points_and_vecs.append(&mut polymer.points_and_vecs);
         PolymerRef {
-            storage_idx,
-            segments,
+            storage_idx: storage_idx as u32,
+            segments: segments as u32,
             bounds: polymer.bounds,
         }
     }
@@ -52,8 +52,8 @@ impl PolymerStorage {
 
     pub fn read(&self, polymer: PolymerRef) -> OwnedPolymer {
         OwnedPolymer {
-            points_and_vecs: self.points_and_vecs
-                [polymer.storage_idx..polymer.storage_idx + 2 * (polymer.segments + 1)]
+            points_and_vecs: self.points_and_vecs[polymer.storage_idx as usize
+                ..(polymer.storage_idx + 2 * (polymer.segments + 1)) as usize]
                 .to_vec(),
             bounds: polymer.bounds,
             st_ref: Some(polymer),
@@ -71,7 +71,7 @@ impl PolymerStorage {
             .expect("can only overwrite if the polymer is already in the storage");
         this_ref.bounds = polymer.bounds;
         for (i, val) in polymer.points_and_vecs.into_iter().enumerate() {
-            self.points_and_vecs[i + this_ref.storage_idx] = val
+            self.points_and_vecs[i + this_ref.storage_idx as usize] = val
         }
         this_ref
     }
@@ -81,12 +81,13 @@ impl PolymerStorage {
         idx: &PolymerRef,
     ) -> impl Iterator<Item = BorrowedSegment<'_>> {
         debug_assert!(
-            idx.storage_idx + (idx.segments + 1) * 2 <= self.points_and_vecs.len(),
+            (idx.storage_idx + (idx.segments + 1) * 2) as usize <= self.points_and_vecs.len(),
             "polymer with idx {} out of bounds, storage_len: {}",
             idx.storage_idx,
             self.points_and_vecs.len()
         );
-        self.points_and_vecs[idx.storage_idx..idx.storage_idx + (idx.segments + 1) * 2]
+        self.points_and_vecs
+            [idx.storage_idx as usize..(idx.storage_idx + (idx.segments + 1) * 2) as usize]
             .windows(4)
             .step_by(2)
             .map(|window| {
@@ -168,8 +169,8 @@ impl PolymerStorage {
 
     pub fn as_path(&self, polymer: &PolymerRef, stroke_width: f32) -> Path {
         let mut data = Data::new().move_to((
-            self.points_and_vecs[polymer.storage_idx].x,
-            self.points_and_vecs[polymer.storage_idx].y,
+            self.points_and_vecs[polymer.storage_idx as usize].x,
+            self.points_and_vecs[polymer.storage_idx as usize].y,
         ));
         // i points to the start of the segment
         for i in (polymer.storage_idx..polymer.storage_idx + polymer.segments * 2).step_by(2) {
@@ -177,14 +178,21 @@ impl PolymerStorage {
                 Position::Absolute,
                 (
                     (
-                        self.points_and_vecs[i].x + self.points_and_vecs[i + 1].x,
-                        self.points_and_vecs[i].y + self.points_and_vecs[i + 1].y,
+                        self.points_and_vecs[i as usize].x
+                            + self.points_and_vecs[(i + 1) as usize].x,
+                        self.points_and_vecs[i as usize].y
+                            + self.points_and_vecs[(i + 1) as usize].y,
                     ),
                     (
-                        self.points_and_vecs[i + 2].x - self.points_and_vecs[i + 3].x,
-                        self.points_and_vecs[i + 2].y - self.points_and_vecs[i + 3].y,
+                        self.points_and_vecs[(i + 2) as usize].x
+                            - self.points_and_vecs[(i + 3) as usize].x,
+                        self.points_and_vecs[(i + 2) as usize].y
+                            - self.points_and_vecs[(i + 3) as usize].y,
                     ),
-                    (self.points_and_vecs[i + 2].x, self.points_and_vecs[i + 2].y),
+                    (
+                        self.points_and_vecs[(i + 2) as usize].x,
+                        self.points_and_vecs[(i + 2) as usize].y,
+                    ),
                 )
                     .into(),
             ));
@@ -199,8 +207,8 @@ impl PolymerStorage {
 }
 
 pub struct PolymerRef {
-    storage_idx: usize,
-    segments: usize,
+    storage_idx: u32,
+    segments: u32,
     bounds: Rect,
 }
 
@@ -301,7 +309,7 @@ impl OwnedPolymer {
 
         let mut this = Self::new(points, vectors);
         this.translate(approx_center - this.bounds.get_center());
-        this.rotate(rng.gen::<f32>() * TAU);
+        this.rotate(rng.random::<f32>() * TAU);
         this
     }
 
@@ -330,23 +338,6 @@ impl OwnedPolymer {
 }
 
 impl OwnedPolymer {
-    pub fn vary(&mut self, transition_scale: [f32; METHODS], rng: &mut MyRng) -> usize {
-        let method = rng.gen_range(0..METHODS);
-        match method {
-            0 => self.translate(gaussian_vector(rng) * transition_scale[0]),
-            1 => self.rotate((rng.gen::<f32>() - 0.5) * transition_scale[1] * TAU),
-            2 => self.rotate_segment(
-                rng.gen_range(0..self.count_segments()),
-                (rng.gen::<f32>() - 0.5) * transition_scale[2] * TAU,
-            ),
-            3 => self.scales_vecs(1.0 - (rng.gen::<f32>() - 0.5) * 2.0 * transition_scale[3]),
-            4 => self.scales_vecs_random(transition_scale[4], rng),
-            5 => self.stretch(1.0 - (rng.gen::<f32>() - 0.5) * 2.0 * transition_scale[5] / 1.0),
-            METHODS.. => unreachable!(),
-        }
-        method
-    }
-
     pub fn translate(&mut self, vector: Vector) {
         self.points_mut().for_each(|p| *p += vector);
         debug_assert!(
@@ -399,7 +390,7 @@ impl OwnedPolymer {
 
     pub fn scales_vecs_random(&mut self, factor: f32, rng: &mut MyRng) {
         self.vecs_mut()
-            .for_each(|vec| *vec = (rng.gen::<f32>() - 0.5) * 2.0 * factor * *vec);
+            .for_each(|vec| *vec = (rng.random::<f32>() - 0.5) * 2.0 * factor * *vec);
         self.update_bounds();
     }
 

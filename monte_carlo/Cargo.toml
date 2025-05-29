@@ -1,0 +1,18 @@
+[package]
+name = "monte_carlo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+common = { path = "../common" }
+convolve2d = { version = "0.2.0", features = ["image"] }
+serde = { version = "1.0.217", features = ["derive"] }
+image = "0.25.2"
+nalgebra = { version = "0.33.0", features = ["serde-serialize"] }
+random = { path = "../random" }
+chrono = "0.4.39"
+svg = "0.18.0"
+ron = "0.8.1"
+anyhow = "1.0.95"
+minifb = "0.28.0"
+tiny-skia = "0.11.4"

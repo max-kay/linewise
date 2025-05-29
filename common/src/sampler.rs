@@ -1,7 +1,7 @@
 use image::Luma;
 use serde::{Deserialize, Serialize};
 
-use crate::{quad_tree::Rect, Vector};
+use crate::{Vector, quad_tree::Rect};
 
 #[derive(Serialize, Deserialize)]
 pub struct Samples2d<T> {

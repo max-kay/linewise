@@ -3,16 +3,13 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use convolve2d::{convolve2d, kernel};
 use image::DynamicImage;
-use rand::prelude::*;
 
-use super::{AcceptanceCounter, Model, ModelParameters, SvgParams, TransitionScales, METHODS};
-use crate::energy::Energy;
-use crate::polymer::PolymerStorage;
-use crate::quad_tree::{QuadTree, Rect};
-use crate::sampler::Samples2d;
-use crate::utils;
-use crate::MyRng;
-use crate::Vector;
+use super::{AcceptanceCounter, METHODS, Model, ModelParameters, SvgParams, TransitionScales};
+use common::Vector;
+use common::energy::Energy;
+use common::polymer::PolymerStorage;
+use common::quad_tree::{QuadTree, Rect};
+use common::sampler::Samples2d;
 
 pub struct ParamBuilder {
     segment_len: Option<f32>,
@@ -269,18 +266,18 @@ impl ModelBuilder {
         self
     }
 
-    pub fn build(self) -> Model {
+    pub fn build(self) -> anyhow::Result<Model> {
         let params = self.params.unwrap_or(ModelParameters::new().build());
         let aspect = self.aspect_ratio.unwrap_or(1.0);
         let boundary = Rect::new(0.0, aspect.sqrt(), 0.0, 1.0 / aspect.sqrt());
-        let rng = MyRng::from_rng(thread_rng()).unwrap();
+        let rng = random::new_rng();
 
         let log_dir = self.log_dir.unwrap_or_else(|| {
             Path::new("out").join(Utc::now().format("%Y-%m-%d_%H-%M").to_string())
         });
-        utils::clear_or_create_dir(&log_dir).unwrap();
+        std::fs::create_dir_all(&log_dir)?;
 
-        Model {
+        Ok(Model {
             field: self.field.unwrap_or(Samples2d::new_filled(
                 Vector::new(0.0, 0.0),
                 1,
@@ -308,7 +305,7 @@ impl ModelBuilder {
             rates: Vec::new(),
             rng,
             log_dir,
-        }
+        })
     }
 }
 

@@ -1,12 +1,10 @@
 use either::Either::{self, Left, Right};
-use rand::Rng;
-
-use crate::MyRng;
 
 const OBJECTS_ON_LEAVES: usize = 8;
 
 mod iter;
 mod rect;
+use random::{MyRng, Rng};
 pub use rect::Rect;
 
 pub trait Bounded {
@@ -80,7 +78,7 @@ impl<T: Bounded> QuadTree<T> {
     }
 
     pub fn pop_random(&mut self, rng: &mut MyRng) -> T {
-        self.pop(rng.gen_range(0..self.len))
+        self.pop(rng.random_range(0..self.len))
     }
 }
 
@@ -99,11 +97,13 @@ struct Node<T: Bounded> {
 
 impl<T: Bounded> Node<T> {
     fn new(objects: Vec<T>, bounds: Rect) -> Self {
-        assert!(objects
-            .iter()
-            .map(|x| bounds.contains(&x.bounding_box()))
-            .reduce(|acc, x| acc && x)
-            .unwrap_or(true));
+        assert!(
+            objects
+                .iter()
+                .map(|x| bounds.contains(&x.bounding_box()))
+                .reduce(|acc, x| acc && x)
+                .unwrap_or(true)
+        );
 
         if objects.len() <= OBJECTS_ON_LEAVES {
             return Self {

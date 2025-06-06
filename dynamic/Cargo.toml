@@ -1,0 +1,10 @@
+[package]
+name = "dynamic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+common = { path = "../common" }
+serde = { version = "1.0.217", features = ["derive"] }
+nalgebra = { version = "0.33.0", features = ["serde-serialize"] }
+random = { path = "../random" }

@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     let parameters = ModelParameters::new()
         .segment_len(0.01)
         .max_segments(5)
-        .polymer_count(500)
+        .spline_count(1000)
         .unset_make_plots()
         .sweeps_per_temp(400)
         .energy_factors(energy_factors)
@@ -44,5 +44,8 @@ fn main() -> anyhow::Result<()> {
         .potential_from_fn(potential, bounds, (2000, 2000))
         .add_params(parameters)
         .build()?;
-    model.run(None)
+    let start = cpu_time::ProcessTime::now();
+    model.run(None)?;
+    println!("time elapsed: {:?}", start.elapsed());
+    Ok(())
 }

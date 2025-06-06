@@ -7,14 +7,14 @@ use image::DynamicImage;
 use super::{AcceptanceCounter, METHODS, Model, ModelParameters, SvgParams, TransitionScales};
 use common::Vector;
 use common::energy::Energy;
-use common::polymer::PolymerStorage;
 use common::quad_tree::{QuadTree, Rect};
 use common::sampler::Samples2d;
+use common::spline::SplineStorage;
 
 pub struct ParamBuilder {
     segment_len: Option<f32>,
     max_segments: Option<usize>,
-    polymer_count: Option<usize>,
+    spline_count: Option<usize>,
     interaction_radius: Option<f32>,
 
     energy_factors: Option<Energy>,
@@ -43,7 +43,7 @@ impl ParamBuilder {
         };
         ModelParameters {
             interaction_radius: self.interaction_radius.unwrap_or(0.01),
-            polymer_count: self.polymer_count.unwrap_or(900),
+            spline_count: self.spline_count.unwrap_or(900),
             segment_len: self.segment_len.unwrap_or(0.03),
             max_segments: self.max_segments.unwrap_or(4),
 
@@ -61,8 +61,8 @@ impl ParamBuilder {
             make_plots: self.make_plots,
         }
     }
-    pub fn polymer_count(mut self, polymer_count: usize) -> Self {
-        self.polymer_count = Some(polymer_count);
+    pub fn spline_count(mut self, spline_count: usize) -> Self {
+        self.spline_count = Some(spline_count);
         self
     }
     pub fn segment_len(mut self, segment_len: f32) -> Self {
@@ -146,7 +146,7 @@ impl Default for ParamBuilder {
             save_start_svg: false,
             save_step_svg: false,
             save_end_svg: true,
-            polymer_count: None,
+            spline_count: None,
             segment_len: None,
             max_segments: None,
             interaction_radius: None,
@@ -287,8 +287,8 @@ impl ModelBuilder {
             potential: self
                 .potential
                 .unwrap_or(Samples2d::new_filled(0.0, 1, 1, boundary)),
-            polymers: QuadTree::new(),
-            storage: PolymerStorage::new(),
+            splines: QuadTree::new(),
+            storage: SplineStorage::new(),
             params,
             svg_params: self.svg_params.unwrap_or(SvgParams {
                 format: (

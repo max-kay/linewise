@@ -16,12 +16,12 @@ use crate::{
 use random::rand_unit;
 
 #[derive(Clone)]
-pub struct PolymerStorage {
+pub struct SplineStorage {
     points_and_vecs: Vec<Vector>,
     seg_starts: Vec<usize>,
 }
 
-impl PolymerStorage {
+impl SplineStorage {
     pub fn new() -> Self {
         Self {
             points_and_vecs: Vec::new(),
@@ -29,19 +29,19 @@ impl PolymerStorage {
         }
     }
 
-    pub fn add_polymer(&mut self, mut polymer: OwnedPolymer) -> PolymerRef {
+    pub fn add_spline(&mut self, mut spline: OwnedSpline) -> SplineRef {
         assert!(
-            polymer.st_ref.is_none(),
-            "trying to add an owned polymer which already is in the storage"
+            spline.st_ref.is_none(),
+            "trying to add an owned spline which already is in the storage"
         );
         let storage_idx = self.points_and_vecs.len();
         self.seg_starts.push(storage_idx);
-        let segments = polymer.count_segments();
-        self.points_and_vecs.append(&mut polymer.points_and_vecs);
-        PolymerRef {
+        let segments = spline.count_segments();
+        self.points_and_vecs.append(&mut spline.points_and_vecs);
+        SplineRef {
             storage_idx: storage_idx as u32,
             segments: segments as u32,
-            bounds: polymer.bounds,
+            bounds: spline.bounds,
         }
     }
 
@@ -50,27 +50,28 @@ impl PolymerStorage {
         self.seg_starts.shrink_to_fit();
     }
 
-    pub fn read(&self, polymer: PolymerRef) -> OwnedPolymer {
-        OwnedPolymer {
-            points_and_vecs: self.points_and_vecs[polymer.storage_idx as usize
-                ..(polymer.storage_idx + 2 * (polymer.segments + 1)) as usize]
+    pub fn read(&self, spline: SplineRef) -> OwnedSpline {
+        OwnedSpline {
+            points_and_vecs: self.points_and_vecs[spline.storage_idx as usize
+                ..(spline.storage_idx + 2 * (spline.segments + 1)) as usize]
                 .to_vec(),
-            bounds: polymer.bounds,
-            st_ref: Some(polymer),
+            bounds: spline.bounds,
+            st_ref: Some(spline),
         }
     }
 
-    pub fn revalidate_ref(&mut self, polymer: OwnedPolymer) -> PolymerRef {
-        polymer
+    pub fn revalidate_ref(&mut self, spline: OwnedSpline) -> SplineRef {
+        spline
             .st_ref
-            .expect("can only validate if the polymer is in the Storage")
+            .expect("can only validate if the spline is in the Storage")
     }
-    pub fn overwrite_polymer(&mut self, polymer: OwnedPolymer) -> PolymerRef {
-        let mut this_ref = polymer
+
+    pub fn overwrite_spline(&mut self, spline: OwnedSpline) -> SplineRef {
+        let mut this_ref = spline
             .st_ref
-            .expect("can only overwrite if the polymer is already in the storage");
-        this_ref.bounds = polymer.bounds;
-        for (i, val) in polymer.points_and_vecs.into_iter().enumerate() {
+            .expect("can only overwrite if the spline is already in the storage");
+        this_ref.bounds = spline.bounds;
+        for (i, val) in spline.points_and_vecs.into_iter().enumerate() {
             self.points_and_vecs[i + this_ref.storage_idx as usize] = val
         }
         this_ref
@@ -78,11 +79,11 @@ impl PolymerStorage {
 
     pub fn get_borrowed_segments(
         &self,
-        idx: &PolymerRef,
+        idx: &SplineRef,
     ) -> impl Iterator<Item = BorrowedSegment<'_>> {
         debug_assert!(
             (idx.storage_idx + (idx.segments + 1) * 2) as usize <= self.points_and_vecs.len(),
-            "polymer with idx {} out of bounds, storage_len: {}",
+            "spline with idx {} out of bounds, storage_len: {}",
             idx.storage_idx,
             self.points_and_vecs.len()
         );
@@ -167,13 +168,13 @@ impl PolymerStorage {
         pix_map
     }
 
-    pub fn as_path(&self, polymer: &PolymerRef, stroke_width: f32) -> Path {
+    pub fn as_path(&self, spline: &SplineRef, stroke_width: f32, mark: bool) -> Path {
         let mut data = Data::new().move_to((
-            self.points_and_vecs[polymer.storage_idx as usize].x,
-            self.points_and_vecs[polymer.storage_idx as usize].y,
+            self.points_and_vecs[spline.storage_idx as usize].x,
+            self.points_and_vecs[spline.storage_idx as usize].y,
         ));
         // i points to the start of the segment
-        for i in (polymer.storage_idx..polymer.storage_idx + polymer.segments * 2).step_by(2) {
+        for i in (spline.storage_idx..spline.storage_idx + spline.segments * 2).step_by(2) {
             data.append(Command::CubicCurve(
                 Position::Absolute,
                 (
@@ -199,50 +200,50 @@ impl PolymerStorage {
         }
         let path = Path::new()
             .set("fill", "none")
-            .set("stroke", "black")
+            .set("stroke", if mark { "red" } else { "black" })
             .set("stroke-width", stroke_width)
             .set("d", data);
         path
     }
 }
 
-pub struct PolymerRef {
+pub struct SplineRef {
     storage_idx: u32,
     segments: u32,
     bounds: Rect,
 }
 
-impl PartialEq for PolymerRef {
+impl PartialEq for SplineRef {
     fn eq(&self, other: &Self) -> bool {
         self.storage_idx == other.storage_idx
     }
 }
-impl Eq for PolymerRef {}
+impl Eq for SplineRef {}
 
-impl PartialOrd for PolymerRef {
+impl PartialOrd for SplineRef {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         self.storage_idx.partial_cmp(&other.storage_idx)
     }
 }
-impl Ord for PolymerRef {
+impl Ord for SplineRef {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         self.storage_idx.cmp(&other.storage_idx)
     }
 }
 
-impl Bounded for PolymerRef {
+impl Bounded for SplineRef {
     fn bounding_box(&self) -> Rect {
         self.bounds
     }
 }
 
-pub struct OwnedPolymer {
+pub struct OwnedSpline {
     points_and_vecs: Vec<Vector>,
     bounds: Rect,
-    st_ref: Option<PolymerRef>,
+    st_ref: Option<SplineRef>,
 }
 
-impl OwnedPolymer {
+impl OwnedSpline {
     pub fn new(points: Vec<Vector>, vectors: Vec<Vector>) -> Self {
         assert_eq!(
             points.len(),
@@ -314,30 +315,27 @@ impl OwnedPolymer {
     }
 
     pub fn update_bounds(&mut self) {
-        let mut bounds = self.points_and_vecs[0]
-            .bounding_box()
-            .combine(self.points_and_vecs[self.points_and_vecs.len() - 2].bounding_box());
+        let mut bounds = self.points_and_vecs[0].bounding_box();
         for i in 0..self.count_segments() {
             let c1 = self.points_and_vecs[2 * i] + self.points_and_vecs[2 * i + 1];
             let c2 = self.points_and_vecs[2 * i + 2] - self.points_and_vecs[2 * i + 3];
-            bounds = bounds.combine(c1.bounding_box());
-            bounds = bounds.combine(c2.bounding_box());
+            let p2 = self.points_and_vecs[2 * i + 2];
+            bounds = bounds.combine(Rect::from_points(&[c1, c2, p2]));
         }
         self.bounds = bounds;
     }
 }
 
-impl OwnedPolymer {
+impl OwnedSpline {
     pub fn get_borrowed_segments(&self) -> impl Iterator<Item = BorrowedSegment<'_>> {
         self.points_and_vecs.windows(4).step_by(2).map(|window| {
             let points_and_vecs = unsafe { &*(window.as_ptr() as *const [Vector; 4]) };
-
             BorrowedSegment { points_and_vecs }
         })
     }
 }
 
-impl OwnedPolymer {
+impl OwnedSpline {
     pub fn translate(&mut self, vector: Vector) {
         self.points_mut().for_each(|p| *p += vector);
         debug_assert!(
@@ -345,7 +343,7 @@ impl OwnedPolymer {
                 .iter()
                 .map(|vec| vec.x.is_finite() && vec.y.is_finite())
                 .reduce(|acc, val| acc && val)
-                .expect("is non empty"),
+                .unwrap_or(false),
             "translate{:?}",
             vector
         );
@@ -363,7 +361,7 @@ impl OwnedPolymer {
                 .iter()
                 .map(|vec| vec.x.is_finite() && vec.y.is_finite())
                 .reduce(|acc, val| acc && val)
-                .expect("is non empty"),
+                .unwrap_or(false),
             "rotate({})",
             radians
         );
@@ -406,20 +404,20 @@ impl OwnedPolymer {
     pub fn intersects(&self, other: &BorrowedSegment, precision: usize) -> bool {
         let mut out = false;
         for segment in self.get_borrowed_segments() {
-            out |= other.interscets(&segment, precision);
+            out |= other.intersects(&segment, precision);
         }
         out
     }
 }
 
-impl Bounded for OwnedPolymer {
+impl Bounded for OwnedSpline {
     fn bounding_box(&self) -> Rect {
         self.bounds
     }
 }
 
-impl PartialEq<PolymerRef> for OwnedPolymer {
-    fn eq(&self, other: &PolymerRef) -> bool {
+impl PartialEq<SplineRef> for OwnedSpline {
+    fn eq(&self, other: &SplineRef) -> bool {
         self.st_ref.as_ref().expect("index initialised").storage_idx == other.storage_idx
     }
 }
@@ -525,7 +523,7 @@ fn line_intersects(line_1: &[Vector; 2], line_2: &[Vector; 2]) -> bool {
 }
 
 impl BorrowedSegment<'_> {
-    pub fn interscets(&self, other: &Self, precision: usize) -> bool {
+    pub fn intersects(&self, other: &Self, precision: usize) -> bool {
         let points_1: Vec<_> = self.position_iter_with_end(precision).collect();
         let points_2: Vec<_> = other.position_iter_with_end(precision).collect();
         let mut intersects = false;

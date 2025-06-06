@@ -13,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use svg::{Document, Node, node::element::Group};
 
 use common::{
-    BorrowedSegment, CLEAR_LINE, Energy, MOVE_UP, OwnedPolymer, PIXEL_PER_CM, PolymerRef,
-    PolymerStorage, QuadTree, Rect, Samples2d, Vector, plt, quad_tree::Bounded,
+    BorrowedSegment, CLEAR_LINE, Energy, MOVE_UP, OwnedSpline, PIXEL_PER_CM, QuadTree, Rect,
+    Samples2d, SplineRef, SplineStorage, Vector, plt, quad_tree::Bounded,
 };
 
 mod builder;
@@ -25,7 +25,7 @@ pub const METHODS: usize = 6;
 
 #[derive(Serialize, Deserialize)]
 pub struct ModelParameters {
-    polymer_count: usize,
+    spline_count: usize,
     segment_len: f32,
     max_segments: usize,
     interaction_radius: f32,
@@ -64,22 +64,22 @@ impl ModelParameters {
     }
 }
 
-pub fn vary_polymer(
-    polymer: &mut OwnedPolymer,
+pub fn vary_spline(
+    spline: &mut OwnedSpline,
     transition_scale: [f32; METHODS],
     rng: &mut MyRng,
 ) -> usize {
     let method = rng.random_range(0..METHODS);
     match method {
-        0 => polymer.translate(gaussian_vector(rng) * transition_scale[0]),
-        1 => polymer.rotate((rng.random::<f32>() - 0.5) * transition_scale[1] * TAU),
-        2 => polymer.rotate_segment(
-            rng.random_range(0..polymer.count_segments()),
+        0 => spline.translate(gaussian_vector(rng) * transition_scale[0]),
+        1 => spline.rotate((rng.random::<f32>() - 0.5) * transition_scale[1] * TAU),
+        2 => spline.rotate_segment(
+            rng.random_range(0..spline.count_segments()),
             (rng.random::<f32>() - 0.5) * transition_scale[2] * TAU,
         ),
-        3 => polymer.scales_vecs(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[3]),
-        4 => polymer.scales_vecs_random(transition_scale[4], rng),
-        5 => polymer.stretch(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[5] / 1.0),
+        3 => spline.scales_vecs(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[3]),
+        4 => spline.scales_vecs_random(transition_scale[4], rng),
+        5 => spline.stretch(1.0 - (rng.random::<f32>() - 0.5) * 2.0 * transition_scale[5] / 1.0),
         METHODS.. => unreachable!(),
     }
     method
@@ -149,8 +149,8 @@ impl Display for TransitionScales {
 pub struct Model {
     field: Samples2d<Vector>,
     potential: Samples2d<f32>,
-    storage: PolymerStorage,
-    polymers: QuadTree<PolymerRef>,
+    storage: SplineStorage,
+    splines: QuadTree<SplineRef>,
     params: ModelParameters,
     svg_params: SvgParams,
     boundary: Rect,
@@ -168,16 +168,16 @@ impl Model {
     }
 
     pub fn initialize(&mut self) -> anyhow::Result<()> {
-        let mut storage = PolymerStorage::new();
-        let mut polymers: QuadTree<PolymerRef> = QuadTree::new();
-        let max_iterations = self.params.polymer_count * 100;
-        // TODO: think about the influence of this algorithm for length distr of the polymers
+        let mut storage = SplineStorage::new();
+        let mut splines: QuadTree<SplineRef> = QuadTree::new();
+        let max_iterations = self.params.spline_count * 100;
+        // TODO: think about the influence of this algorithm for length distr of the splines
         // and if I even care
         for _ in 0..max_iterations {
-            if polymers.len() == self.params.polymer_count {
+            if splines.len() == self.params.spline_count {
                 break;
             }
-            let polymer = OwnedPolymer::new_random(
+            let spline = OwnedSpline::new_random(
                 self.boundary
                     .add_radius(-(self.params.max_segments as f32) * self.params.segment_len)
                     .from_box_coords((self.rng.random(), self.rng.random())),
@@ -186,25 +186,28 @@ impl Model {
                 &mut self.rng,
             );
             let mut intersection = false;
-            for other in polymers.query_intersects(polymer.bounding_box()) {
+            'outer: for other in splines.query_intersects(spline.bounding_box()) {
                 for o_segment in storage.get_borrowed_segments(other) {
-                    intersection |= polymer.intersects(&o_segment, self.params.precision)
+                    if spline.intersects(&o_segment, self.params.precision * 20) {
+                        intersection = true;
+                        break 'outer;
+                    }
                 }
             }
             if !intersection {
-                let polyref = storage.add_polymer(polymer);
-                polymers.insert(polyref);
+                let polyref = storage.add_spline(spline);
+                splines.insert(polyref);
             }
         }
-        if polymers.len() != self.params.polymer_count {
+        if splines.len() != self.params.spline_count {
             anyhow::bail!(
-                "couldn't place {} nonintersecting polymers in {} iterations",
-                self.params.polymer_count,
+                "couldn't place {} nonintersecting splines in {} iterations",
+                self.params.spline_count,
                 max_iterations
             )
         }
         self.storage = storage;
-        self.polymers = polymers;
+        self.splines = splines;
         Ok(())
     }
 }
@@ -305,26 +308,26 @@ impl Model {
         }
     }
 
-    pub fn calculate_energy_for_this(&self, polymer: &OwnedPolymer) -> Energy {
+    pub fn calculate_energy_for_this(&self, spline: &OwnedSpline) -> Energy {
         let mut energy = Energy::zero();
-        for segment in polymer.get_borrowed_segments() {
+        for segment in spline.get_borrowed_segments() {
             energy += self.calculate_energy_from_segment(segment)
         }
         let mut interaction_sum = 0.0;
         for other in self
-            .polymers
+            .splines
             .query_intersects(
-                polymer
+                spline
                     .bounding_box()
                     .add_radius(self.params.interaction_radius),
             )
-            .filter(|&p| *polymer == *p)
-            .collect::<Vec<&PolymerRef>>()
+            .filter(|&p| *spline == *p)
+            .collect::<Vec<&SplineRef>>()
         {
             for other_segment in self.storage.get_borrowed_segments(other) {
                 for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
                     let mut inner_sum = 0.0;
-                    for my_segment in polymer.get_borrowed_segments() {
+                    for my_segment in spline.get_borrowed_segments() {
                         for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
                             inner_sum +=
                                 self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
@@ -339,30 +342,32 @@ impl Model {
         energy
     }
 
-    pub fn calculate_energy_for_tot(&self, polymer: &PolymerRef) -> Energy {
+    pub fn calculate_energy_for_tot(&self, spline: &SplineRef) -> Energy {
         let mut energy = Energy::zero();
 
-        for segment in self.storage.get_borrowed_segments(&polymer) {
+        for segment in self.storage.get_borrowed_segments(&spline) {
             energy += self.calculate_energy_from_segment(segment)
         }
         let mut interaction_sum = 0.0;
         for other in self
-            .polymers
+            .splines
             .query_intersects(
-                polymer
+                spline
                     .bounding_box()
                     .add_radius(self.params.interaction_radius),
             )
-            .filter(|&p| *polymer < *p)
-            .collect::<Vec<&PolymerRef>>()
+            .filter(|&p| *spline < *p)
+            .collect::<Vec<&SplineRef>>()
         {
             for other_segment in self.storage.get_borrowed_segments(other) {
                 for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
                     let mut inner_sum = 0.0;
-                    for my_segment in self.storage.get_borrowed_segments(polymer) {
+                    for my_segment in self.storage.get_borrowed_segments(spline) {
                         for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
-                            inner_sum +=
-                                self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
+                            let dist = (m_pos - o_pos).norm();
+                            let term = self.interaction_potential(dist) * m_der.norm();
+                            println!("{}", dist);
+                            inner_sum += term;
                         }
                     }
                     interaction_sum += inner_sum * o_der.norm()
@@ -376,11 +381,11 @@ impl Model {
 
     pub fn calc_tot_energy(&self) -> Energy {
         let mut summed_energy = Energy::zero();
-        for polymer in self.polymers.iter() {
-            let res = self.calculate_energy_for_tot(polymer);
+        for spline in self.splines.iter() {
+            let res = self.calculate_energy_for_tot(spline);
             // assert!(res.is_finite(), "Energy was infinite at {:?}", res);
             if !res.is_finite() {
-                println!("Energy was not finite at {:?}", res);
+                // println!("Energy was not finite at {:?}", res);
             }
 
             summed_energy += res;
@@ -395,42 +400,40 @@ impl Model {
 
 impl Model {
     pub fn take_mc_step(&mut self, temp: f32) {
-        let mut polymer = self.storage.read(self.polymers.pop_random(&mut self.rng));
-        let e_0 = self.calculate_energy_for_this(&polymer).sum();
+        let mut spline = self.storage.read(self.splines.pop_random(&mut self.rng));
+        let e_0 = self.calculate_energy_for_this(&spline).sum();
 
-        let method = vary_polymer(&mut polymer, self.transition_scales.0, &mut self.rng);
+        let method = vary_spline(&mut spline, self.transition_scales.0, &mut self.rng);
 
-        let e_1 = self.calculate_energy_for_this(&polymer).sum();
+        let e_1 = self.calculate_energy_for_this(&spline).sum();
 
         let d_e = e_1 - e_0;
 
         if d_e < 0.0 {
             self.acceptance_couter
                 .increase(method, AcceptanceCounter::LOWER);
-            self.polymers
-                .insert(self.storage.overwrite_polymer(polymer));
+            self.splines.insert(self.storage.overwrite_spline(spline));
         } else if self.rng.random::<f32>() < (-d_e / temp).exp() {
             self.acceptance_couter
                 .increase(method, AcceptanceCounter::ACCEPTED);
-            self.polymers
-                .insert(self.storage.overwrite_polymer(polymer))
+            self.splines.insert(self.storage.overwrite_spline(spline))
         } else {
             self.acceptance_couter
                 .increase(method, AcceptanceCounter::REJECTED);
-            self.polymers.insert(self.storage.revalidate_ref(polymer))
+            self.splines.insert(self.storage.revalidate_ref(spline))
         }
     }
 
     pub fn run_at_temp(
         &mut self,
         temp: f32,
-        tx: Option<&Sender<PolymerStorage>>,
+        tx: Option<&Sender<SplineStorage>>,
     ) -> anyhow::Result<()> {
         self.clear_logs();
 
         for j in 1..=self.params.sweeps_per_temp {
             self.print_sweep_status(j)?;
-            for _ in 0..self.polymers.len() {
+            for _ in 0..self.splines.len() {
                 self.take_mc_step(temp);
             }
 
@@ -453,7 +456,7 @@ impl Model {
 
     pub fn run(
         mut self,
-        display_opts: Option<(Sender<PolymerStorage>, Arc<AtomicBool>)>,
+        display_opts: Option<(Sender<SplineStorage>, Arc<AtomicBool>)>,
     ) -> anyhow::Result<()> {
         if self.params.save_parameters {
             let path = self.log_dir.join("parameters.ron");
@@ -507,8 +510,8 @@ impl Model {
 }
 
 impl Model {
-    pub fn count_polymers(&self) -> usize {
-        self.polymers.len()
+    pub fn count_splines(&self) -> usize {
+        self.splines.len()
     }
 
     pub fn get_bounds(&self) -> Rect {
@@ -526,14 +529,15 @@ impl Model {
     }
     pub fn make_svg_group(&self) -> (Group, Rect) {
         let mut group = Group::new();
-        let mut polymers = Group::new();
-        for polymer in &self.polymers {
-            polymers.append(
-                self.storage
-                    .as_path(polymer, Self::LINE_WIDTH_FACTOR * self.params.segment_len),
-            )
+        let mut splines = Group::new();
+        for spline in &self.splines {
+            splines.append(self.storage.as_path(
+                spline,
+                Self::LINE_WIDTH_FACTOR * self.params.segment_len,
+                false,
+            ))
         }
-        group.append(polymers);
+        group.append(splines);
         group.append(
             self.boundary
                 .as_svg(Self::LINE_WIDTH_FACTOR * self.params.segment_len),

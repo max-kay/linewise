@@ -69,6 +69,33 @@ impl Rect {
         }
     }
 
+    pub fn from_points(points: &[Vector]) -> Self {
+        debug_assert!(!points.is_empty());
+        let mut x_min = points[0].x;
+        let mut x_max = points[0].x;
+        let mut y_min = points[0].y;
+        let mut y_max = points[0].y;
+        for p in &points[1..] {
+            if p.x < x_min {
+                x_min = p.x
+            } else if p.x > x_max {
+                x_max = p.x
+            }
+
+            if p.y < y_min {
+                y_min = p.y
+            } else if p.y > y_max {
+                y_max = p.y
+            }
+        }
+        Self {
+            x_min,
+            x_max,
+            y_min,
+            y_max,
+        }
+    }
+
     pub fn translate(self, vector: Vector) -> Self {
         Self {
             x_min: self.x_min + vector.x,

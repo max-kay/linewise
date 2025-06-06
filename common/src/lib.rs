@@ -2,14 +2,14 @@ use nalgebra::{Rotation2, Vector2};
 
 pub mod energy;
 pub mod plt;
-pub mod polymer;
 pub mod quad_tree;
 pub mod sampler;
+pub mod spline;
 
 pub use energy::Energy;
-pub use polymer::{BorrowedSegment, OwnedPolymer, PolymerRef, PolymerStorage};
 pub use quad_tree::{Bounded, QuadTree, Rect};
 pub use sampler::Samples2d;
+pub use spline::{BorrowedSegment, OwnedSpline, SplineRef, SplineStorage};
 
 pub const CLEAR_LINE: &'static str = "\x1B[2K\r";
 pub const MOVE_UP: &'static str = "\x1B[A\r";

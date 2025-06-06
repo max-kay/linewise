@@ -27,7 +27,7 @@ fn main() -> anyhow::Result<()> {
         .segment_len(0.005)
         .interaction_radius(0.02)
         .max_segments(8)
-        .polymer_count(2000)
+        .spline_count(2000)
         .sweeps_per_temp(500)
         .energy_factors(default_energy)
         .temp_steps(12)
@@ -71,8 +71,8 @@ fn run_in_window(model: Model) -> anyhow::Result<()> {
     });
 
     while window.is_open() && !window.is_key_down(Key::Escape) {
-        if let Ok(polymers) = rx.try_recv() {
-            let pixmap = polymers.rasterize(line_width, window_scale, width as u32, height as u32);
+        if let Ok(splines) = rx.try_recv() {
+            let pixmap = splines.rasterize(line_width, window_scale, width as u32, height as u32);
             let buffer: Vec<_> = pixmap
                 .data()
                 .chunks(4)

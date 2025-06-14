@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use svg::node::element::{Path, path::Data};
 
 use crate::Vector;
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Rect {
     x_min: f32,
     x_max: f32,
@@ -200,7 +200,7 @@ impl Rect {
             .line_to((self.x_min, self.y_max))
             .line_to((self.x_max, self.y_max))
             .line_to((self.x_max, self.y_min))
-            .line_to((self.x_min, self.y_min));
+            .close();
         Path::new()
             .set("fill", "none")
             .set("stroke", "red")

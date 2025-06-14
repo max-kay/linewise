@@ -23,7 +23,7 @@ impl<T: Bounded> From<Vec<T>> for QuadTree<T> {
             .iter()
             .map(|val| val.bounding_box())
             .reduce(|acc, val| val.combine(acc))
-            .unwrap();
+            .expect("the vector should not be empty");
         Self {
             root: Node::new(objects, bounds),
             len,
@@ -68,6 +68,10 @@ impl<T: Bounded> QuadTree<T> {
             self.root = Node::new(as_vec, new_bounds);
             self.len += 1;
         }
+    }
+
+    pub fn get_bounds(&self) -> Rect {
+        self.root.bounds
     }
 }
 

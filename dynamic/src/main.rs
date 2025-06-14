@@ -1,12 +1,12 @@
-use common::{OwnedSpline, Vector};
+use common::{Spline, Vector};
 
 struct Model {
-    pos: OwnedSpline,
-    vel: OwnedSpline,
+    pos: Spline,
+    vel: Spline,
 }
 
 impl Model {
-    pub fn new(initial_pos: OwnedSpline, initial_vel: OwnedSpline) -> Self {
+    pub fn new(initial_pos: Spline, initial_vel: Spline) -> Self {
         Self {
             pos: initial_pos,
             vel: initial_vel,
@@ -21,13 +21,13 @@ impl Model {
 }
 
 pub fn main() {
-    let initial_pos = OwnedSpline::new(
+    let initial_pos = Spline::new(
         (0..4).map(|i| Vector::new(i as f32, 0.0)).collect(),
         (0..4)
             .map(|i| Vector::new(1.0 / 3.0, (-1.0_f32).powi(i) / 3.0))
             .collect(),
     );
-    let initial_vel = OwnedSpline::new(
+    let initial_vel = Spline::new(
         (0..4).map(|_| Vector::zeros()).collect(),
         (0..4).map(|_| Vector::zeros()).collect(),
     );

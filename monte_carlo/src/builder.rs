@@ -5,11 +5,12 @@ use convolve2d::{convolve2d, kernel};
 use image::DynamicImage;
 
 use super::{AcceptanceCounter, METHODS, Model, ModelParameters, SvgParams, TransitionScales};
-use common::Vector;
 use common::energy::Energy;
-use common::quad_tree::{QuadTree, Rect};
+use common::quad_tree::{Bounded, QuadTree, Rect};
 use common::sampler::Samples2d;
-use common::spline::SplineStorage;
+use common::storage::SplineStorage;
+use common::{Spline, SplineRef, Vector};
+use random::Rng;
 
 pub struct ParamBuilder {
     segment_len: Option<f32>,
@@ -270,13 +271,53 @@ impl ModelBuilder {
         let params = self.params.unwrap_or(ModelParameters::new().build());
         let aspect = self.aspect_ratio.unwrap_or(1.0);
         let boundary = Rect::new(0.0, aspect.sqrt(), 0.0, 1.0 / aspect.sqrt());
-        let rng = random::new_rng();
+        let mut rng = random::new_rng();
 
         let log_dir = self.log_dir.unwrap_or_else(|| {
             Path::new("out").join(Utc::now().format("%Y-%m-%d_%H-%M").to_string())
         });
         std::fs::create_dir_all(&log_dir)?;
 
+        let mut storage = SplineStorage::new();
+        let mut splines: QuadTree<SplineRef> = QuadTree::new();
+        let max_iterations = params.spline_count * 100;
+        // TODO: think about the influence of this algorithm for length distr of the splines
+        // and if I even care
+        for _ in 0..max_iterations {
+            if splines.len() == params.spline_count {
+                break;
+            }
+            let spline = Spline::new_random(
+                boundary
+                    .add_radius(-(params.max_segments as f32) * params.segment_len)
+                    .from_box_coords((rng.random(), rng.random())),
+                params.segment_len,
+                rng.random_range(1..=params.max_segments),
+                &mut rng,
+            );
+            let mut intersection = false;
+            // FIXME: checking for intersections is not enough needs to be same as energy
+            // calcualtion
+            'outer: for other in splines.query_intersects(spline.bounding_box()) {
+                for o_segment in storage.get_segments(other) {
+                    if spline.intersects(&o_segment, params.precision * 20) {
+                        intersection = true;
+                        break 'outer;
+                    }
+                }
+            }
+            if !intersection {
+                let polyref = storage.add_spline(spline);
+                splines.insert(polyref);
+            }
+        }
+        if splines.len() != params.spline_count {
+            anyhow::bail!(
+                "couldn't place {} nonintersecting splines in {} iterations",
+                params.spline_count,
+                max_iterations
+            )
+        }
         Ok(Model {
             field: self.field.unwrap_or(Samples2d::new_filled(
                 Vector::new(0.0, 0.0),
@@ -287,8 +328,10 @@ impl ModelBuilder {
             potential: self
                 .potential
                 .unwrap_or(Samples2d::new_filled(0.0, 1, 1, boundary)),
-            splines: QuadTree::new(),
-            storage: SplineStorage::new(),
+
+            splines: splines,
+            markings: storage.default_spline_info(),
+            storage: storage,
             params,
             svg_params: self.svg_params.unwrap_or(SvgParams {
                 format: (

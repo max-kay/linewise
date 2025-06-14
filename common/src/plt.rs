@@ -52,7 +52,10 @@ pub fn divergent_chart(
     let root = BitMapBackend::new(&path, PLOT_FORMAT).into_drawing_area();
     root.fill(&WHITE)?;
 
-    let first = energies.first().unwrap().as_array();
+    let first = energies
+        .first()
+        .expect("the chart should never be drawn empty")
+        .as_array();
     let y_min = energies
         .iter()
         .map(|val| {
@@ -61,10 +64,10 @@ pub fn divergent_chart(
                 .enumerate()
                 .map(|(i, val)| val - first[i])
                 .min_by(|a, b| a.total_cmp(b))
-                .unwrap()
+                .expect("the elements of energies was non-finite")
         })
         .min_by(|a, b| a.total_cmp(b))
-        .unwrap();
+        .expect("the elements of energies was non-finite");
     let y_max = energies
         .iter()
         .map(|val| {
@@ -73,10 +76,10 @@ pub fn divergent_chart(
                 .enumerate()
                 .map(|(i, val)| val - first[i])
                 .max_by(|a, b| a.total_cmp(b))
-                .unwrap()
+                .expect("the elements of energies was non-finite")
         })
         .max_by(|a, b| a.total_cmp(b))
-        .unwrap();
+        .expect("the elements of energies was non-finite");
 
     let mut chart = ChartBuilder::on(&root)
         .margin(200)

@@ -5,11 +5,13 @@ pub mod plt;
 pub mod quad_tree;
 pub mod sampler;
 pub mod spline;
+pub mod storage;
 
 pub use energy::Energy;
 pub use quad_tree::{Bounded, QuadTree, Rect};
 pub use sampler::Samples2d;
-pub use spline::{BorrowedSegment, OwnedSpline, SplineRef, SplineStorage};
+pub use spline::{Segment, Spline};
+pub use storage::{SplineRef, SplineStorage};
 
 pub const CLEAR_LINE: &'static str = "\x1B[2K\r";
 pub const MOVE_UP: &'static str = "\x1B[A\r";

@@ -1,12 +1,12 @@
 use std::{f32::consts::TAU, usize};
 
-use nalgebra::{Matrix2, Matrix2x3, Matrix2x4, Vector2, Vector3, Vector4};
+use nalgebra::{Matrix2, Matrix2x4, Matrix4, Matrix4x2, Matrix4x3, Vector2, Vector3, Vector4};
 use random::{MyRng, Rng};
 use svg::node::element::{
-    Path,
+    Path as SvgPath,
     path::{Command, Data, Position},
 };
-use tiny_skia::{Color, Paint, PathBuilder, Pixmap, Stroke, Transform};
+use tiny_skia::PathBuilder;
 
 use crate::{
     Rotation, Vector,
@@ -15,235 +15,12 @@ use crate::{
 
 use random::rand_unit;
 
-#[derive(Clone)]
-pub struct SplineStorage {
-    points_and_vecs: Vec<Vector>,
-    seg_starts: Vec<usize>,
-}
-
-impl SplineStorage {
-    pub fn new() -> Self {
-        Self {
-            points_and_vecs: Vec::new(),
-            seg_starts: Vec::new(),
-        }
-    }
-
-    pub fn add_spline(&mut self, mut spline: OwnedSpline) -> SplineRef {
-        assert!(
-            spline.st_ref.is_none(),
-            "trying to add an owned spline which already is in the storage"
-        );
-        let storage_idx = self.points_and_vecs.len();
-        self.seg_starts.push(storage_idx);
-        let segments = spline.count_segments();
-        self.points_and_vecs.append(&mut spline.points_and_vecs);
-        SplineRef {
-            storage_idx: storage_idx as u32,
-            segments: segments as u32,
-            bounds: spline.bounds,
-        }
-    }
-
-    pub fn shrink_to_fit(&mut self) {
-        self.points_and_vecs.shrink_to_fit();
-        self.seg_starts.shrink_to_fit();
-    }
-
-    pub fn read(&self, spline: SplineRef) -> OwnedSpline {
-        OwnedSpline {
-            points_and_vecs: self.points_and_vecs[spline.storage_idx as usize
-                ..(spline.storage_idx + 2 * (spline.segments + 1)) as usize]
-                .to_vec(),
-            bounds: spline.bounds,
-            st_ref: Some(spline),
-        }
-    }
-
-    pub fn revalidate_ref(&mut self, spline: OwnedSpline) -> SplineRef {
-        spline
-            .st_ref
-            .expect("can only validate if the spline is in the Storage")
-    }
-
-    pub fn overwrite_spline(&mut self, spline: OwnedSpline) -> SplineRef {
-        let mut this_ref = spline
-            .st_ref
-            .expect("can only overwrite if the spline is already in the storage");
-        this_ref.bounds = spline.bounds;
-        for (i, val) in spline.points_and_vecs.into_iter().enumerate() {
-            self.points_and_vecs[i + this_ref.storage_idx as usize] = val
-        }
-        this_ref
-    }
-
-    pub fn get_borrowed_segments(
-        &self,
-        idx: &SplineRef,
-    ) -> impl Iterator<Item = BorrowedSegment<'_>> {
-        debug_assert!(
-            (idx.storage_idx + (idx.segments + 1) * 2) as usize <= self.points_and_vecs.len(),
-            "spline with idx {} out of bounds, storage_len: {}",
-            idx.storage_idx,
-            self.points_and_vecs.len()
-        );
-        self.points_and_vecs
-            [idx.storage_idx as usize..(idx.storage_idx + (idx.segments + 1) * 2) as usize]
-            .windows(4)
-            .step_by(2)
-            .map(|window| {
-                let points_and_vecs = unsafe { &*(window.as_ptr() as *const [Vector; 4]) };
-                BorrowedSegment { points_and_vecs }
-            })
-    }
-
-    pub fn segments<'a>(&'a self) -> impl Iterator<Item = BorrowedSegment<'a>> {
-        (0..self.points_and_vecs.len() / 2 - 1).flat_map(|i| {
-            let st_idx = i * 2;
-            // if the end point of the window I'm trying to construct is the start of a segment
-            // then that window is no valid segment and should be skipped
-            if self.seg_starts.binary_search(&(st_idx + 2)).is_ok() {
-                None
-            } else {
-                // SAFETY: the highest value i can take is len / 2 - 2
-                // so the st_idx is at most len - 4
-                // the slice [len - 4..len] is allways valid
-                let window = &self.points_and_vecs[st_idx..st_idx + 4];
-                let points_and_vecs = unsafe { &*(window.as_ptr() as *const [Vector; 4]) };
-                Some(BorrowedSegment { points_and_vecs })
-            }
-        })
-    }
-
-    pub fn rasterize(
-        &self,
-        line_width: f32,
-        scaling_factor: f32,
-        width: u32,
-        height: u32,
-    ) -> Pixmap {
-        let paint = Paint {
-            shader: tiny_skia::Shader::SolidColor(Color::from_rgba8(0, 0, 0, 255)),
-            ..Default::default()
-        };
-        let mut pix_map = Pixmap::new(width, height).unwrap();
-        pix_map.fill(Color::from_rgba8(255, 255, 255, 255));
-        let mut path = PathBuilder::new();
-        let mut index_iter = self.seg_starts.iter();
-        path.move_to(self.points_and_vecs[0].x, self.points_and_vecs[0].y);
-        index_iter.next();
-        let mut next_start = *index_iter.next().unwrap();
-        for i in 0..(self.points_and_vecs.len() / 2 - 1) {
-            let segment_start = i * 2;
-            if segment_start + 2 == next_start {
-                let mut place_holder = PathBuilder::new();
-                std::mem::swap(&mut place_holder, &mut path);
-                pix_map.stroke_path(
-                    &place_holder.finish().unwrap(),
-                    &paint,
-                    &Stroke {
-                        width: line_width,
-                        ..Default::default()
-                    },
-                    Transform::from_scale(scaling_factor, scaling_factor),
-                    None,
-                );
-                if segment_start + 4 == self.points_and_vecs.len() {
-                    break;
-                }
-                let next_pos = self.points_and_vecs[segment_start + 2];
-                path.move_to(next_pos.x, next_pos.y);
-                next_start = index_iter
-                    .next()
-                    .cloned()
-                    .unwrap_or(self.points_and_vecs.len());
-                continue;
-            }
-            let p1 = self.points_and_vecs[segment_start] + self.points_and_vecs[segment_start + 1];
-            let p2 =
-                self.points_and_vecs[segment_start + 2] - self.points_and_vecs[segment_start + 3];
-            let p3 = self.points_and_vecs[segment_start + 2];
-            path.cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
-        }
-        pix_map
-    }
-
-    pub fn as_path(&self, spline: &SplineRef, stroke_width: f32, mark: bool) -> Path {
-        let mut data = Data::new().move_to((
-            self.points_and_vecs[spline.storage_idx as usize].x,
-            self.points_and_vecs[spline.storage_idx as usize].y,
-        ));
-        // i points to the start of the segment
-        for i in (spline.storage_idx..spline.storage_idx + spline.segments * 2).step_by(2) {
-            data.append(Command::CubicCurve(
-                Position::Absolute,
-                (
-                    (
-                        self.points_and_vecs[i as usize].x
-                            + self.points_and_vecs[(i + 1) as usize].x,
-                        self.points_and_vecs[i as usize].y
-                            + self.points_and_vecs[(i + 1) as usize].y,
-                    ),
-                    (
-                        self.points_and_vecs[(i + 2) as usize].x
-                            - self.points_and_vecs[(i + 3) as usize].x,
-                        self.points_and_vecs[(i + 2) as usize].y
-                            - self.points_and_vecs[(i + 3) as usize].y,
-                    ),
-                    (
-                        self.points_and_vecs[(i + 2) as usize].x,
-                        self.points_and_vecs[(i + 2) as usize].y,
-                    ),
-                )
-                    .into(),
-            ));
-        }
-        let path = Path::new()
-            .set("fill", "none")
-            .set("stroke", if mark { "red" } else { "black" })
-            .set("stroke-width", stroke_width)
-            .set("d", data);
-        path
-    }
-}
-
-pub struct SplineRef {
-    storage_idx: u32,
-    segments: u32,
-    bounds: Rect,
-}
-
-impl PartialEq for SplineRef {
-    fn eq(&self, other: &Self) -> bool {
-        self.storage_idx == other.storage_idx
-    }
-}
-impl Eq for SplineRef {}
-
-impl PartialOrd for SplineRef {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.storage_idx.partial_cmp(&other.storage_idx)
-    }
-}
-impl Ord for SplineRef {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.storage_idx.cmp(&other.storage_idx)
-    }
-}
-
-impl Bounded for SplineRef {
-    fn bounding_box(&self) -> Rect {
-        self.bounds
-    }
-}
-
-pub struct OwnedSpline {
+pub struct Spline {
     points_and_vecs: Vec<Vector>,
     bounds: Rect,
-    st_ref: Option<SplineRef>,
 }
 
-impl OwnedSpline {
+impl Spline {
     pub fn new(points: Vec<Vector>, vectors: Vec<Vector>) -> Self {
         assert_eq!(
             points.len(),
@@ -262,10 +39,32 @@ impl OwnedSpline {
         let mut this = Self {
             points_and_vecs,
             bounds: Rect::default(),
-            st_ref: None,
         };
         this.update_bounds();
         this
+    }
+
+    pub fn from_parts(points_and_vecs: &[Vector], bounds: Rect) -> Self {
+        debug_assert!(
+            points_and_vecs.len() >= 4 && points_and_vecs.len() % 2 == 0,
+            "tried to create spline from invalid slice of vector."
+        );
+        assert!(
+            BorrowedSpline(points_and_vecs).calculate_bounds() == bounds,
+            "bounds were incorrect"
+        );
+        Self {
+            points_and_vecs: points_and_vecs.to_vec(),
+            bounds,
+        }
+    }
+
+    pub fn into_vec(self) -> Vec<Vector> {
+        self.points_and_vecs
+    }
+
+    pub fn as_slice(&self) -> &[Vector] {
+        &self.points_and_vecs
     }
 
     pub fn count_segments(&self) -> usize {
@@ -315,27 +114,24 @@ impl OwnedSpline {
     }
 
     pub fn update_bounds(&mut self) {
-        let mut bounds = self.points_and_vecs[0].bounding_box();
-        for i in 0..self.count_segments() {
-            let c1 = self.points_and_vecs[2 * i] + self.points_and_vecs[2 * i + 1];
-            let c2 = self.points_and_vecs[2 * i + 2] - self.points_and_vecs[2 * i + 3];
-            let p2 = self.points_and_vecs[2 * i + 2];
-            bounds = bounds.combine(Rect::from_points(&[c1, c2, p2]));
-        }
-        self.bounds = bounds;
+        self.bounds = self.as_borrowed_spline().calculate_bounds()
     }
 }
 
-impl OwnedSpline {
-    pub fn get_borrowed_segments(&self) -> impl Iterator<Item = BorrowedSegment<'_>> {
-        self.points_and_vecs.windows(4).step_by(2).map(|window| {
-            let points_and_vecs = unsafe { &*(window.as_ptr() as *const [Vector; 4]) };
-            BorrowedSegment { points_and_vecs }
-        })
+impl Spline {
+    pub fn segments(&self) -> impl Iterator<Item = Segment> {
+        self.points_and_vecs
+            .windows(4)
+            .step_by(2)
+            .map(|window| Segment(Matrix2x4::from_columns(window)))
+    }
+
+    pub fn as_borrowed_spline(&self) -> BorrowedSpline<'_> {
+        BorrowedSpline(&self.points_and_vecs)
     }
 }
 
-impl OwnedSpline {
+impl Spline {
     pub fn translate(&mut self, vector: Vector) {
         self.points_mut().for_each(|p| *p += vector);
         debug_assert!(
@@ -401,45 +197,110 @@ impl OwnedSpline {
         self.update_bounds();
     }
 
-    pub fn intersects(&self, other: &BorrowedSegment, precision: usize) -> bool {
+    pub fn intersects(&self, other: &Segment, precision: usize) -> bool {
         let mut out = false;
-        for segment in self.get_borrowed_segments() {
+        for segment in self.segments() {
             out |= other.intersects(&segment, precision);
         }
         out
     }
 }
 
-impl Bounded for OwnedSpline {
+impl Bounded for Spline {
     fn bounding_box(&self) -> Rect {
         self.bounds
     }
 }
 
-impl PartialEq<SplineRef> for OwnedSpline {
-    fn eq(&self, other: &SplineRef) -> bool {
-        self.st_ref.as_ref().expect("index initialised").storage_idx == other.storage_idx
+pub struct BorrowedSpline<'a>(&'a [Vector]);
+
+impl<'a> BorrowedSpline<'a> {
+    pub fn from_slice(slice: &'a [Vector]) -> Self {
+        debug_assert!(
+            slice.len() > 2 && slice.len() % 2 == 0,
+            "tried create BorrowedSpline from an invalid slice len"
+        );
+        Self(slice)
+    }
+    pub fn count_segments(&self) -> usize {
+        self.0.len() / 2 - 1
+    }
+    pub fn calculate_bounds(&self) -> Rect {
+        let mut bounds = self.0[0].bounding_box();
+        for i in 0..self.count_segments() {
+            let c1 = self.0[2 * i] + self.0[2 * i + 1];
+            let c2 = self.0[2 * i + 2] - self.0[2 * i + 3];
+            let p2 = self.0[2 * i + 2];
+            bounds = bounds.combine(Rect::from_points(&[c1, c2, p2]));
+        }
+        bounds
+    }
+
+    pub fn segments(&self) -> impl Iterator<Item = Segment> {
+        self.0
+            .windows(4)
+            .step_by(2)
+            .map(|window| Segment(Matrix2x4::from_columns(window)))
+    }
+
+    pub fn as_ts_path(&self) -> tiny_skia::Path {
+        let mut path = PathBuilder::new();
+        path.move_to(self.0[0].x, self.0[0].y);
+        for i in 0..(self.0.len() / 2 - 1) {
+            let segment_start = i * 2;
+            let p1 = self.0[segment_start] + self.0[segment_start + 1];
+            let p2 = self.0[segment_start + 2] - self.0[segment_start + 3];
+            let p3 = self.0[segment_start + 2];
+            path.cubic_to(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y);
+        }
+        path.finish().expect("paths are always valid")
+    }
+
+    pub fn as_svg_path(&self, color: &'static str, width: f32) -> SvgPath {
+        let mut data = Data::new().move_to((self.0[0].x, self.0[0].y));
+        // i points to the start of the segment
+        for i in 0..self.0.len() / 2 - 1 {
+            let c1 = self.0[2 * i as usize] + self.0[(2 * i + 1) as usize];
+            let c2 = self.0[(2 * i + 2) as usize] - self.0[(2 * i + 3) as usize];
+            let c3 = self.0[(2 * i + 2) as usize];
+            data.append(Command::CubicCurve(
+                Position::Absolute,
+                ((c1.x, c1.y), (c2.x, c2.y), (c3.x, c3.y)).into(),
+            ));
+        }
+        let path = SvgPath::new()
+            .set("fill", "none")
+            .set("stroke", color)
+            .set("stroke-width", width)
+            .set("d", data);
+        path
+    }
+
+    pub fn as_slice(&self) -> &[Vector] {
+        self.0
     }
 }
 
-pub struct BorrowedSegment<'a> {
-    points_and_vecs: &'a [Vector; 4],
+pub struct Segment(Matrix2x4<f32>);
+
+impl Segment {
+    pub fn from_mat(mat: Matrix2x4<f32>) -> Self {
+        Self(mat)
+    }
+
+    pub fn from_slice(slice: &[Vector]) -> Self {
+        Self(Matrix2x4::from_columns(slice))
+    }
 }
 
-impl BorrowedSegment<'_> {
+impl Segment {
     pub fn s_iter(steps: usize) -> impl Iterator<Item = f32> {
         (0..steps).map(move |i| i as f32 / steps as f32)
     }
-
-    pub fn get_coord_matrix_0(&self) -> Matrix2x4<f32> {
-        let columns = [
-            self.points_and_vecs[0],
-            self.points_and_vecs[0] + self.points_and_vecs[1],
-            self.points_and_vecs[2] - self.points_and_vecs[3],
-            self.points_and_vecs[2],
-        ];
-        Matrix2x4::from_columns(&columns)
+    pub fn s_iter_end(steps: usize) -> impl Iterator<Item = f32> {
+        (0..steps + 1).map(move |i| i as f32 / steps as f32)
     }
+
     pub fn get_bernstein_3(s: f32) -> Vector4<f32> {
         Vector4::new(
             (1.0 - s).powi(3),
@@ -448,65 +309,59 @@ impl BorrowedSegment<'_> {
             s.powi(3),
         )
     }
-    pub fn position_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        let coord_matrix = self.get_coord_matrix_0();
-        Self::s_iter(steps).map(move |s| coord_matrix * Self::get_bernstein_3(s))
-    }
-    pub fn position_iter_with_end(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        let coord_matrix = self.get_coord_matrix_0();
-        (0..steps + 1)
-            .map(move |i| i as f32 / steps as f32)
-            .map(move |s| coord_matrix * Self::get_bernstein_3(s))
-    }
-
-    pub fn get_coord_matrix_1(&self) -> Matrix2x3<f32> {
-        let columns = [
-            self.points_and_vecs[1],
-            self.points_and_vecs[2]
-                - self.points_and_vecs[0]
-                - self.points_and_vecs[3]
-                - self.points_and_vecs[1],
-            self.points_and_vecs[3],
-        ];
-        Matrix2x3::from_columns(&columns)
-    }
     pub fn get_bernstein_2(s: f32) -> Vector3<f32> {
         Vector3::new((1.0 - s).powi(2), 2.0 * (1.0 - s) * s, s.powi(2))
-    }
-    pub fn derivative_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        let coord_matrix = self.get_coord_matrix_1();
-        Self::s_iter(steps).map(move |s| 3.0 * coord_matrix * Self::get_bernstein_2(s))
-    }
-
-    pub fn get_coord_matrix_2(&self) -> Matrix2<f32> {
-        let columns = [
-            self.points_and_vecs[2]
-                - self.points_and_vecs[0]
-                - self.points_and_vecs[3]
-                - 2.0 * self.points_and_vecs[1],
-            self.points_and_vecs[0] - self.points_and_vecs[2]
-                + self.points_and_vecs[1]
-                + 2.0 * self.points_and_vecs[3],
-        ];
-        Matrix2::from_columns(&columns)
     }
     pub fn get_bernstein_1(s: f32) -> Vector2<f32> {
         Vector2::new(1.0 - s, s)
     }
-    pub fn derivative2_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        let coord_matrix = self.get_coord_matrix_2();
-        Self::s_iter(steps).map(move |s| 6.0 * coord_matrix * Self::get_bernstein_1(s))
+
+    #[rustfmt::skip]
+    const CHAR_MAT_POS: Matrix4<f32> = Matrix4::new(
+        1.0, 1.0, 0.0, 0.0,
+        0.0, 1.0, 0.0, 0.0,
+        0.0, 0.0, 1.0, 1.0,
+        0.0, 0.0, -1.0, 0.0,
+    );
+    #[rustfmt::skip]
+    const CHAR_MAT_DER: Matrix4x3<f32> = Matrix4x3::new(
+        0.0, -1.0, 0.0,
+        1.0, -1.0, 0.0,
+        0.0, 1.0, 0.0,
+        0.0, -1.0, 1.0
+    );
+    #[rustfmt::skip]
+    const CHAR_MAT_DER_2: Matrix4x2<f32> = Matrix4x2::new(
+        -1.0, 1.0,
+        -2.0, 1.0,
+        1.0, -1.0,
+        -1.0, 2.0,
+    );
+
+    pub fn position(&self, s: f32) -> Vector {
+        self.0 * Self::CHAR_MAT_POS * Self::get_bernstein_3(s)
+    }
+    pub fn derivative(&self, s: f32) -> Vector {
+        3.0 * self.0 * Self::CHAR_MAT_DER * Self::get_bernstein_2(s)
+    }
+    pub fn derivative2(&self, s: f32) -> Vector {
+        6.0 * self.0 * Self::CHAR_MAT_DER_2 * Self::get_bernstein_1(s)
     }
 
+    pub fn pos_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        Self::s_iter(steps).map(|s| self.position(s))
+    }
+    pub fn der_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        Self::s_iter(steps).map(|s| self.derivative(s))
+    }
+    pub fn der2_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        Self::s_iter(steps).map(|s| self.derivative2(s))
+    }
     pub fn pos_and_der_iter(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector)> {
-        self.position_iter(steps).zip(self.derivative_iter(steps))
+        Self::s_iter(steps).map(|s| (self.position(s), self.derivative(s)))
     }
-
     pub fn all_iters(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector, Vector)> {
-        self.position_iter(steps)
-            .zip(self.derivative_iter(steps))
-            .zip(self.derivative2_iter(steps))
-            .map(|((path, der), der2)| (path, der, der2))
+        Self::s_iter(steps).map(|s| (self.position(s), self.derivative(s), self.derivative2(s)))
     }
 }
 
@@ -522,41 +377,89 @@ fn line_intersects(line_1: &[Vector; 2], line_2: &[Vector; 2]) -> bool {
         && (0.0 <= intersection_vec.y && intersection_vec.y <= 1.0)
 }
 
-impl BorrowedSegment<'_> {
+impl Segment {
     pub fn intersects(&self, other: &Self, precision: usize) -> bool {
-        let points_1: Vec<_> = self.position_iter_with_end(precision).collect();
-        let points_2: Vec<_> = other.position_iter_with_end(precision).collect();
-        let mut intersects = false;
+        let points_1: Vec<_> = Segment::s_iter_end(precision)
+            .map(|s| self.position(s))
+            .collect();
+        let points_2: Vec<_> = Segment::s_iter_end(precision)
+            .map(|s| other.position(s))
+            .collect();
         for line_1 in points_1.windows(2) {
             let line_1 = unsafe { &*(line_1.as_ptr() as *const [Vector; 2]) };
             for line_2 in points_2.windows(2) {
                 let line_2 = unsafe { &*(line_2.as_ptr() as *const [Vector; 2]) };
-                intersects |= line_intersects(line_1, line_2);
+                if line_intersects(line_1, line_2) {
+                    return true;
+                }
             }
         }
-        intersects
+        return false;
     }
 }
 
-impl BorrowedSegment<'_> {
-    pub fn as_triangles(&self, precision: usize, line_width: f32) -> Vec<[Vector; 3]> {
-        let mut out = Vec::new();
-        for i in 0..precision + 1 {
-            let s_0 = i as f32 / precision as f32;
-            let s_1 = (i + 1) as f32 / precision as f32;
-            let p_0 = self.get_coord_matrix_0() * Self::get_bernstein_3(s_0);
-            let offset_0 = Rotation::new(TAU / 4.0)
-                * (self.get_coord_matrix_1() * Self::get_bernstein_2(s_1)).normalize()
-                * line_width
-                / 2.0;
-            let p_1 = self.get_coord_matrix_0() * Self::get_bernstein_3(s_1);
-            let offset_1 = Rotation::new(TAU / 4.0)
-                * (self.get_coord_matrix_1() * Self::get_bernstein_2(s_1)).normalize()
-                * line_width
-                / 2.0;
-            out.push([p_0 + offset_0, p_0 - offset_0, p_1 + offset_1]);
-            out.push([p_0 - offset_0, p_1 - offset_1, p_1 + offset_1]);
+#[cfg(test)]
+mod test {
+    use svg::{
+        Node,
+        node::element::{Circle, Group, Line},
+    };
+
+    use super::*;
+    #[test]
+    fn visual() {
+        let side_len = 100.0;
+        let s_width = side_len / 500.0;
+        let center = Vector::new(side_len / 2.0, side_len / 2.0);
+
+        let points = 4;
+        let rot = Rotation::new(-TAU / 18.0);
+        let off_set = side_len / points as f32;
+        let spline = Spline::new(
+            (0..points)
+                .map(|i| {
+                    let v = Vector::new((i as f32 + 0.5) * off_set, 0.5 * side_len);
+                    rot * (v - center) + center
+                })
+                .collect(),
+            (0..points)
+                .map(|i| (off_set / 3.0) * (rot * Vector::new(1.0, -(-1.0_f32).powi(i))))
+                .collect(),
+        );
+
+        let mut doc = svg::Document::new()
+            .set("width", side_len)
+            .set("height", side_len);
+        doc.append(spline.as_borrowed_spline().as_svg_path("black", s_width));
+
+        let steps = 10;
+
+        let mut poss = Group::new();
+        let mut ders = Group::new();
+        for segment in spline.segments() {
+            for (pos, mut der) in segment.pos_and_der_iter(steps) {
+                der = der / steps as f32;
+                poss.append(
+                    Circle::new()
+                        .set("cx", pos.x)
+                        .set("cy", pos.y)
+                        .set("r", s_width)
+                        .set("fill", "black"),
+                );
+                ders.append(
+                    Line::new()
+                        .set("x1", pos.x)
+                        .set("x2", pos.x + der.x)
+                        .set("y1", pos.y)
+                        .set("y2", pos.y + der.y)
+                        .set("stroke-width", s_width)
+                        .set("stroke", "blue"),
+                )
+            }
         }
-        out
+        doc.append(spline.bounds.as_svg(s_width * 0.7));
+        doc.append(ders);
+        doc.append(poss);
+        svg::save("test.svg", &doc).unwrap()
     }
 }

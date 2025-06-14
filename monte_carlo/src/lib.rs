@@ -7,14 +7,15 @@ use std::sync::mpsc::Sender;
 use std::{fs, io::Write, path::PathBuf};
 
 use anyhow::anyhow;
+use common::storage::SplineInfo;
 use random::{MyRng, Rng, gaussian_vector};
 use ron::ser::{PrettyConfig, to_string_pretty};
 use serde::{Deserialize, Serialize};
 use svg::{Document, Node, node::element::Group};
 
 use common::{
-    BorrowedSegment, CLEAR_LINE, Energy, MOVE_UP, OwnedSpline, PIXEL_PER_CM, QuadTree, Rect,
-    Samples2d, SplineRef, SplineStorage, Vector, plt, quad_tree::Bounded,
+    CLEAR_LINE, Energy, MOVE_UP, PIXEL_PER_CM, QuadTree, Rect, Samples2d, Segment, Spline,
+    SplineRef, SplineStorage, Vector, plt, quad_tree::Bounded,
 };
 
 mod builder;
@@ -65,7 +66,7 @@ impl ModelParameters {
 }
 
 pub fn vary_spline(
-    spline: &mut OwnedSpline,
+    spline: &mut Spline,
     transition_scale: [f32; METHODS],
     rng: &mut MyRng,
 ) -> usize {
@@ -150,6 +151,7 @@ pub struct Model {
     field: Samples2d<Vector>,
     potential: Samples2d<f32>,
     storage: SplineStorage,
+    markings: SplineInfo<bool>,
     splines: QuadTree<SplineRef>,
     params: ModelParameters,
     svg_params: SvgParams,
@@ -165,50 +167,6 @@ pub struct Model {
 impl Model {
     pub fn new() -> ModelBuilder {
         ModelBuilder::default()
-    }
-
-    pub fn initialize(&mut self) -> anyhow::Result<()> {
-        let mut storage = SplineStorage::new();
-        let mut splines: QuadTree<SplineRef> = QuadTree::new();
-        let max_iterations = self.params.spline_count * 100;
-        // TODO: think about the influence of this algorithm for length distr of the splines
-        // and if I even care
-        for _ in 0..max_iterations {
-            if splines.len() == self.params.spline_count {
-                break;
-            }
-            let spline = OwnedSpline::new_random(
-                self.boundary
-                    .add_radius(-(self.params.max_segments as f32) * self.params.segment_len)
-                    .from_box_coords((self.rng.random(), self.rng.random())),
-                self.params.segment_len,
-                self.rng.random_range(1..=self.params.max_segments),
-                &mut self.rng,
-            );
-            let mut intersection = false;
-            'outer: for other in splines.query_intersects(spline.bounding_box()) {
-                for o_segment in storage.get_borrowed_segments(other) {
-                    if spline.intersects(&o_segment, self.params.precision * 20) {
-                        intersection = true;
-                        break 'outer;
-                    }
-                }
-            }
-            if !intersection {
-                let polyref = storage.add_spline(spline);
-                splines.insert(polyref);
-            }
-        }
-        if splines.len() != self.params.spline_count {
-            anyhow::bail!(
-                "couldn't place {} nonintersecting splines in {} iterations",
-                self.params.spline_count,
-                max_iterations
-            )
-        }
-        self.storage = storage;
-        self.splines = splines;
-        Ok(())
     }
 }
 
@@ -275,7 +233,7 @@ impl Model {
 
 // energy calculation methods
 impl Model {
-    pub fn calculate_energy_from_segment<'a>(&self, segment: BorrowedSegment<'_>) -> Energy {
+    pub fn calculate_energy_from_segment(&self, segment: Segment) -> Energy {
         let mut length_sum = 0.0;
         let mut bending_sum = 0.0;
         let mut potential_sum = 0.0;
@@ -308,9 +266,9 @@ impl Model {
         }
     }
 
-    pub fn calculate_energy_for_this(&self, spline: &OwnedSpline) -> Energy {
+    pub fn calculate_energy_for_this(&self, spline: &Spline) -> Energy {
         let mut energy = Energy::zero();
-        for segment in spline.get_borrowed_segments() {
+        for segment in spline.segments() {
             energy += self.calculate_energy_from_segment(segment)
         }
         let mut interaction_sum = 0.0;
@@ -321,13 +279,13 @@ impl Model {
                     .bounding_box()
                     .add_radius(self.params.interaction_radius),
             )
-            .filter(|&p| *spline == *p)
+            .filter(|&p| self.storage.is_empty(&p))
             .collect::<Vec<&SplineRef>>()
         {
-            for other_segment in self.storage.get_borrowed_segments(other) {
+            for other_segment in self.storage.get_segments(other) {
                 for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
                     let mut inner_sum = 0.0;
-                    for my_segment in spline.get_borrowed_segments() {
+                    for my_segment in spline.segments() {
                         for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
                             inner_sum +=
                                 self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
@@ -345,7 +303,7 @@ impl Model {
     pub fn calculate_energy_for_tot(&self, spline: &SplineRef) -> Energy {
         let mut energy = Energy::zero();
 
-        for segment in self.storage.get_borrowed_segments(&spline) {
+        for segment in self.storage.get_segments(&spline) {
             energy += self.calculate_energy_from_segment(segment)
         }
         let mut interaction_sum = 0.0;
@@ -359,14 +317,13 @@ impl Model {
             .filter(|&p| *spline < *p)
             .collect::<Vec<&SplineRef>>()
         {
-            for other_segment in self.storage.get_borrowed_segments(other) {
+            for other_segment in self.storage.get_segments(other) {
                 for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
                     let mut inner_sum = 0.0;
-                    for my_segment in self.storage.get_borrowed_segments(spline) {
+                    for my_segment in self.storage.get_segments(spline) {
                         for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
                             let dist = (m_pos - o_pos).norm();
                             let term = self.interaction_potential(dist) * m_der.norm();
-                            println!("{}", dist);
                             inner_sum += term;
                         }
                     }
@@ -379,13 +336,14 @@ impl Model {
         energy
     }
 
-    pub fn calc_tot_energy(&self) -> Energy {
+    pub fn calc_tot_energy(&mut self) -> Energy {
         let mut summed_energy = Energy::zero();
         for spline in self.splines.iter() {
             let res = self.calculate_energy_for_tot(spline);
             // assert!(res.is_finite(), "Energy was infinite at {:?}", res);
             if !res.is_finite() {
-                // println!("Energy was not finite at {:?}", res);
+                self.markings[spline] = true;
+                println!("Energy was not finite at {:?}", res);
             }
 
             summed_energy += res;
@@ -394,7 +352,8 @@ impl Model {
     }
 
     pub fn log_energies(&mut self) {
-        self.energies.push(self.calc_tot_energy())
+        let energy = self.calc_tot_energy();
+        self.energies.push(energy)
     }
 }
 
@@ -466,12 +425,11 @@ impl Model {
             )?
         }
 
-        self.initialize()?;
-
         if let Some((tx, _)) = &display_opts {
             tx.send(self.storage.clone())?
         }
 
+        self.calc_tot_energy();
         if self.params.save_start_svg {
             self.save_svg_doc("img_start.svg")?
         }
@@ -527,14 +485,14 @@ impl Model {
     pub fn calc_linewidth(&self) -> f32 {
         Self::LINE_WIDTH_FACTOR * self.params.segment_len
     }
+
     pub fn make_svg_group(&self) -> (Group, Rect) {
         let mut group = Group::new();
         let mut splines = Group::new();
-        for spline in &self.splines {
-            splines.append(self.storage.as_path(
-                spline,
+        for (spline, mark) in self.storage.all_splines().zip(self.markings.iter()) {
+            splines.append(spline.as_svg_path(
+                if *mark { "yellow" } else { "black" },
                 Self::LINE_WIDTH_FACTOR * self.params.segment_len,
-                false,
             ))
         }
         group.append(splines);

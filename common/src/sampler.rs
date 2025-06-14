@@ -1,3 +1,4 @@
+use anyhow::Context;
 use image::Luma;
 use serde::{Deserialize, Serialize};
 
@@ -95,13 +96,14 @@ impl<T> Samples2d<T> {
 }
 
 impl Samples2d<f32> {
-    pub fn as_img(&self, path: &str) {
+    pub fn as_img(&self, path: &str) -> anyhow::Result<()> {
         let img = image::ImageBuffer::<Luma<u8>, Vec<u8>>::from_vec(
             self.width as u32,
             self.height as u32,
             self.samples.iter().map(|val| (val * 256.0) as u8).collect(),
         )
-        .unwrap();
-        img.save(path).unwrap();
+        .context("could not create image")?;
+        img.save(path)?;
+        Ok(())
     }
 }

@@ -50,7 +50,7 @@ impl Energy {
         ]
     }
 
-    pub fn sum(&self) -> f32 {
+    pub fn tot(&self) -> f32 {
         self.as_array().iter().sum()
     }
 

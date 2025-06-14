@@ -266,7 +266,7 @@ impl Model {
         }
     }
 
-    pub fn calculate_energy_for_this(&self, spline: &Spline) -> Energy {
+    pub fn energy_for_delta(&self, spline: &Spline) -> Energy {
         let mut energy = Energy::zero();
         for segment in spline.segments() {
             energy += self.calculate_energy_from_segment(segment)
@@ -300,7 +300,7 @@ impl Model {
         energy
     }
 
-    pub fn calculate_energy_for_tot(&self, spline: &SplineRef) -> Energy {
+    pub fn energy_for_tot(&self, spline: &SplineRef) -> Energy {
         let mut energy = Energy::zero();
 
         for segment in self.storage.get_segments(&spline) {
@@ -337,10 +337,10 @@ impl Model {
     }
 
     pub fn calc_tot_energy(&mut self) -> Energy {
+        self.markings.iter_mut().for_each(|val| *val = false);
         let mut summed_energy = Energy::zero();
         for spline in self.splines.iter() {
-            let res = self.calculate_energy_for_tot(spline);
-            // assert!(res.is_finite(), "Energy was infinite at {:?}", res);
+            let res = self.energy_for_tot(spline);
             if !res.is_finite() {
                 self.markings[spline] = true;
                 println!("Energy was not finite at {:?}", res);
@@ -360,11 +360,11 @@ impl Model {
 impl Model {
     pub fn take_mc_step(&mut self, temp: f32) {
         let mut spline = self.storage.read(self.splines.pop_random(&mut self.rng));
-        let e_0 = self.calculate_energy_for_this(&spline).sum();
+        let e_0 = self.energy_for_delta(&spline).tot();
 
         let method = vary_spline(&mut spline, self.transition_scales.0, &mut self.rng);
 
-        let e_1 = self.calculate_energy_for_this(&spline).sum();
+        let e_1 = self.energy_for_delta(&spline).tot();
 
         let d_e = e_1 - e_0;
 
@@ -531,7 +531,7 @@ impl Model {
             &self
                 .energies
                 .iter()
-                .map(|val| val.sum())
+                .map(|val| val.tot())
                 .collect::<Vec<_>>(),
             caption,
             self.log_dir.join(&format!("{}_tot.png", name)),

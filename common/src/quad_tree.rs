@@ -77,9 +77,16 @@ impl<T: Bounded> QuadTree<T> {
     pub fn print_stats(&self) {
         let mut vec = Vec::new();
         self.root.count_objects(&mut vec, 0);
-        println!("Quadtree occupation:");
+        let tot: usize = vec.iter().sum();
+        println!("\nQuadtree occupation:");
+        println!("{} splines in total", tot);
         for (i, occ) in vec.into_iter().enumerate() {
-            println!("Level {}: {}", i, occ)
+            println!(
+                "Level {}:\n     {:4.1}%      avg per cell {:6.3}%",
+                i,
+                occ as f32 / tot as f32 * 100.0,
+                occ as f32 / tot as f32 * 100.0 / 4_f32.powi(i as i32)
+            )
         }
     }
 }
@@ -214,6 +221,9 @@ impl<T: Bounded> Node<T> {
     }
 
     fn count_objects(&self, vec: &mut Vec<usize>, this_level: usize) {
+        while this_level >= vec.len() {
+            vec.push(0)
+        }
         vec[this_level] += self.objects.len();
         if let Some(ref children) = self.children {
             for child in children {

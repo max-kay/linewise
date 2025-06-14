@@ -163,7 +163,11 @@ impl SplineStorage {
             idx.storage_idx,
             self.points_and_vecs.len()
         );
-        self.get_spline(idx).count_segments()
+        self.points_and_vecs
+            [idx.storage_idx as usize..(idx.storage_idx + 2 * idx.segments) as usize]
+            .windows(4)
+            .step_by(2)
+            .map(|slice| Segment::from_slice(slice))
     }
 
     pub fn get_spline(&self, idx: &SplineRef) -> BorrowedSpline {

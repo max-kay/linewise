@@ -73,6 +73,15 @@ impl<T: Bounded> QuadTree<T> {
     pub fn get_bounds(&self) -> Rect {
         self.root.bounds
     }
+
+    pub fn print_stats(&self) {
+        let mut vec = Vec::new();
+        self.root.count_objects(&mut vec, 0);
+        println!("Quadtree occupation:");
+        for (i, occ) in vec.into_iter().enumerate() {
+            println!("Level {}: {}", i, occ)
+        }
+    }
 }
 
 impl<T: Bounded> QuadTree<T> {
@@ -204,15 +213,14 @@ impl<T: Bounded> Node<T> {
         return Right(index);
     }
 
-    // fn count_objects(&self) -> usize {
-    //     let mut count = self.objects.len();
-    //     if let Some(children) = self.children.as_ref() {
-    //         for child in children {
-    //             count += child.count_objects()
-    //         }
-    //     }
-    //     count
-    // }
+    fn count_objects(&self, vec: &mut Vec<usize>, this_level: usize) {
+        vec[this_level] += self.objects.len();
+        if let Some(ref children) = self.children {
+            for child in children {
+                child.count_objects(vec, this_level + 1);
+            }
+        }
+    }
 }
 
 impl<T: Bounded> Into<Vec<T>> for Node<T> {

@@ -1,12 +1,15 @@
 import datetime as dt
-import importlib
 import inspect
+import importlib
 import os
 import sys
+import time
 import traceback
 
 import drawsvg as draw
-from termcolor import cprint, colored
+from termcolor import colored, cprint
+from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
 
 import figs
 
@@ -19,7 +22,8 @@ def clear_screen():
     sys.stdout.flush()
 
 
-def make_imgs() -> list[tuple[str, str]]:
+def make_imgs() -> str:
+    start = dt.datetime.now()
     fnames = []
     errors = []
     no_error = True
@@ -33,55 +37,73 @@ def make_imgs() -> list[tuple[str, str]]:
             continue
 
         file = f"{name}.svg"
+        fnames.append(file)
         try:
             img: draw.Drawing = func()
+            if not isinstance(img, draw.Drawing):
+                raise TypeError(f"expected drawsvg.Drawing found {type(img)}")
             img.save_svg(os.path.join(FIG_DIR, file))
-            fnames.append(file)
             errors.append("")
         except Exception:
             no_error = False
             errors.append(traceback.format_exc())
 
     if no_error:
-        return colored("successfully generated figures:\n", "green") + "\n".join(fnames)
-    else:
-        return colored("could not generate figures:", "red") + "\n".join(
-            map(
-                filter(zip(fnames, errors), lambda val: len(val[1]) != 0),
-                lambda val: f"{val[0]}\n{val[1]}",
-            )
+        msg = colored("successfully generated figures:\n", "green")
+        msg += "\n".join(fnames)
+        msg += (
+            f"\n\n    took {(dt.datetime.now() - start).total_seconds() * 1000:.3f}ms"
         )
+        return msg
+    else:
+        msg = colored("could not generate figures:\n", "red")
+        for name, err in zip(fnames, errors):
+            if len(err) != 0:
+                msg += f"{name}\n{err}\n"
+        return msg
 
 
 def compile() -> None:
     print(make_imgs())
 
-def watch() -> None:
-    file = os.path.join(REPORT_DIR, "scripts", "figs.py")
-    last_mod: float = os.path.getmtime(file)
-    msg = make_imgs()
-    clear_screen()
-    cprint("Watching Figures", "yellow", attrs=["bold"])
-    print(f"last compilation: {dt.datetime.now().strftime('%H:%m:%S')}")
-    print(msg)
-    while True:
-        mtime = os.path.getmtime(file)
-        if last_mod < mtime:
+
+class FigsEventHandler(FileSystemEventHandler):
+    def on_modified(self, event) -> None:
+        if event.is_directory:
+            return
+        *_, fname = event.src_path.split("/")
+        if fname.endswith(".py"):
+            clear_screen()
+            cprint("Watching figures", "yellow", attrs=["bold"])
             try:
                 importlib.reload(figs)
                 msg = make_imgs()
-                last_mod = mtime
-                clear_screen()
-                cprint("Watching Figures", "yellow", attrs=["bold"])
-                print(f"last compilation: {dt.datetime.now().strftime('%H:%m:%s')}")
+                print(f"last compilation: {dt.datetime.now().strftime('%H:%M:%S')}")
                 print(msg)
             except Exception:
-                clear_screen()
-                cprint("Watching Figures", "yellow", attrs=["bold"])
-                print("could not generate images due to:")
+                cprint("Error while generating images:", "red")
                 traceback.print_exc()
-                last_mod = mtime
-        time.sleep(1)
+
+
+def watch() -> None:
+    event_handler = FigsEventHandler()
+    observer = Observer()
+    figs_path = os.path.join(REPORT_DIR, "scripts")
+    observer.schedule(event_handler, figs_path)
+    observer.start()
+
+    clear_screen()
+    cprint("Watching figures", "yellow", attrs=["bold"])
+    print(f"Last compilation: {dt.datetime.now().strftime('%H:%M:%S')}")
+    print(make_imgs())
+
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        observer.stop()
+        observer.join()
+        print()
 
 
 def main(argv: list[str]) -> None:

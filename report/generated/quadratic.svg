@@ -4,9 +4,9 @@
 <defs>
 </defs>
 <path d="M396.8,1190.4 Q892.8000000000001,297.6,1587.2,1190.4" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M396.8,1190.4 L892.8000000000001,297.6" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M892.8000000000001,297.6 L1587.2,1190.4" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M570.4000000000001,877.9200000000001 L1135.8400000000001,610.08" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
+<path d="M396.8,1190.4 L892.8000000000001,297.6" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M892.8000000000001,297.6 L1587.2,1190.4" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M570.4000000000001,877.9200000000001 L1135.8400000000001,610.08" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
 <path d="M396.8,1190.4 Q570.4000000000001,877.9200000000001,768.3040000000001,784.176" fill="none" stroke="black" stroke-width="5" />
 <ellipse cx="396.8" cy="1190.4" rx="15" ry="15" fill="white" stroke="black" stroke-width="3" />
 <ellipse cx="892.8000000000001" cy="297.6" rx="15" ry="15" fill="white" stroke="black" stroke-width="3" />

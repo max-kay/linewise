@@ -13,13 +13,34 @@ MAIN_STROKE_WIDTH = 5
 SECONDARY_STROKE_WIDTH = 3
 ARROW_HEAD_FACTOR = 5
 POINT_RAD = 15
-NORMAL_LINE = {"fill": "none", "stroke": "black", "stroke_width": MAIN_STROKE_WIDTH}
-SECONDARY_LINE = {
+NORMAL_LINE = {
     "fill": "none",
     "stroke": "black",
-    "stroke_width": SECONDARY_STROKE_WIDTH,
-    "stroke_dasharray": "20 10",
+    "stroke_width": MAIN_STROKE_WIDTH,
 }
+LINES = [
+    NORMAL_LINE,
+    {
+        "fill": "none",
+        "stroke": "black",
+        "stroke_width": SECONDARY_STROKE_WIDTH,
+        "stroke_dasharray": "20 10",
+    },
+    {
+        "fill": "none",
+        "stroke": "black",
+        "stroke_width": SECONDARY_STROKE_WIDTH / 3,
+        "stroke_dasharray": "none",
+    },
+]
+
+
+def add(lhs: tuple[float, float], rhs: tuple[float, float]) -> tuple[float, float]:
+    return (lhs[0] + rhs[0], lhs[1] + rhs[1])
+
+
+def sub(lhs: tuple[float, float], rhs: tuple[float, float]) -> tuple[float, float]:
+    return (lhs[0] - rhs[0], lhs[1] - rhs[1])
 
 
 def to_cartesian(r: float, theta: float) -> tuple[float, float]:

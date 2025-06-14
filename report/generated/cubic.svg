@@ -4,12 +4,12 @@
 <defs>
 </defs>
 <path d="M396.8,1190.4 C694.4,297.6,1388.8,372.0,1587.2,1190.4" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M396.8,1190.4 L694.4,297.6" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M694.4,297.6 L1388.8,372.0" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M1388.8,372.0 L1587.2,1190.4" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M575.36,654.72 L1111.04,342.24" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M1111.04,342.24 L1507.84,863.04" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
-<path d="M896.7679999999999,467.232 L1349.12,654.72" fill="none" stroke="black" stroke-width="3" stroke-dasharray="20 10" />
+<path d="M396.8,1190.4 L694.4,297.6" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M694.4,297.6 L1388.8,372.0" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M1388.8,372.0 L1587.2,1190.4" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M575.36,654.72 L1111.04,342.24" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M1111.04,342.24 L1507.84,863.04" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
+<path d="M896.7679999999999,467.232 L1349.12,654.72" fill="none" stroke="black" stroke-width="1.0" stroke-dasharray="none" />
 <ellipse cx="396.8" cy="1190.4" rx="15" ry="15" fill="white" stroke="black" stroke-width="3" />
 <ellipse cx="694.4" cy="297.6" rx="15" ry="15" fill="white" stroke="black" stroke-width="3" />
 <ellipse cx="1388.8" cy="372.0" rx="15" ry="15" fill="white" stroke="black" stroke-width="3" />

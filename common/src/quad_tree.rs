@@ -1,6 +1,6 @@
 use either::Either::{self, Left, Right};
 
-const OBJECTS_ON_LEAVES: usize = 8;
+const MAX_DEPTH: usize = 3;
 
 mod iter;
 mod rect;
@@ -25,7 +25,7 @@ impl<T: Bounded> From<Vec<T>> for QuadTree<T> {
             .reduce(|acc, val| val.combine(acc))
             .expect("the vector should not be empty");
         Self {
-            root: Node::new(objects, bounds),
+            root: Node::new(objects, bounds, 0),
             len,
         }
     }
@@ -42,7 +42,7 @@ impl<T: Bounded> QuadTree<T> {
     pub fn with_bounds(objects: Vec<T>, bounds: Rect) -> Self {
         let len = objects.len();
         Self {
-            root: Node::new(objects, bounds),
+            root: Node::new(objects, bounds, 0),
             len,
         }
     }
@@ -54,7 +54,7 @@ impl<T: Bounded> QuadTree<T> {
     pub fn insert(&mut self, val: T) {
         if self.len == 0 {
             self.len += 1;
-            self.root = Node::from_single(val);
+            self.root = Node::from_single(val, 0);
             return;
         }
         if self.root.bounds.contains(&val.bounding_box()) {
@@ -65,7 +65,7 @@ impl<T: Bounded> QuadTree<T> {
             let mut as_vec: Vec<_> =
                 std::mem::replace(&mut self.root, Node::new_placeholder()).into();
             as_vec.push(val);
-            self.root = Node::new(as_vec, new_bounds);
+            self.root = Node::new(as_vec, new_bounds, 0);
             self.len += 1;
         }
     }
@@ -111,12 +111,13 @@ impl<T: Bounded> Into<Vec<T>> for QuadTree<T> {
 #[derive(Clone)]
 struct Node<T: Bounded> {
     bounds: Rect,
+    depth: usize,
     objects: Vec<T>,
     children: Option<[Box<Node<T>>; 4]>,
 }
 
 impl<T: Bounded> Node<T> {
-    fn new(objects: Vec<T>, bounds: Rect) -> Self {
+    fn new(objects: Vec<T>, bounds: Rect, depth: usize) -> Self {
         assert!(
             objects
                 .iter()
@@ -125,9 +126,10 @@ impl<T: Bounded> Node<T> {
                 .unwrap_or(true)
         );
 
-        if objects.len() <= OBJECTS_ON_LEAVES {
+        if depth >= MAX_DEPTH {
             return Self {
                 bounds,
+                depth,
                 objects,
                 children: None,
             };
@@ -147,18 +149,24 @@ impl<T: Bounded> Node<T> {
         }
 
         let children = std::array::from_fn(|i| {
-            Box::new(Node::new(sorted_obj[i].drain(..).collect(), boxes[i]))
+            Box::new(Node::new(
+                sorted_obj[i].drain(..).collect(),
+                boxes[i],
+                depth + 1,
+            ))
         });
 
         Self {
             bounds,
+            depth,
             objects: remaining,
             children: Some(children),
         }
     }
 
-    fn from_single(val: T) -> Self {
+    fn from_single(val: T, depth: usize) -> Self {
         Self {
+            depth,
             bounds: val.bounding_box(),
             objects: vec![val],
             children: None,
@@ -168,6 +176,7 @@ impl<T: Bounded> Node<T> {
     /// careful breaks assumptions
     fn new_placeholder() -> Self {
         Self {
+            depth: 0,
             bounds: Rect::new(0.0, 0.0, 0.0, 0.0),
             objects: Vec::new(),
             children: None,
@@ -175,7 +184,7 @@ impl<T: Bounded> Node<T> {
     }
 
     fn insert(&mut self, val: T) {
-        if self.objects.len() < OBJECTS_ON_LEAVES {
+        if self.depth >= MAX_DEPTH {
             self.objects.push(val);
             return;
         }
@@ -193,8 +202,9 @@ impl<T: Bounded> Node<T> {
 
             for i in 0..4 {
                 if boxes[i].contains(&bounds) {
-                    let mut children =
-                        std::array::from_fn(|i| Box::new(Node::new(Vec::new(), boxes[i])));
+                    let mut children = std::array::from_fn(|i| {
+                        Box::new(Node::new(Vec::new(), boxes[i], self.depth))
+                    });
                     children[i].insert(val);
                     self.children = Some(children);
                     return;

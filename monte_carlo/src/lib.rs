@@ -7,6 +7,7 @@ use std::sync::mpsc::Sender;
 use std::{fs, io::Write, path::PathBuf};
 
 use anyhow::anyhow;
+use common::spline::Precomputed;
 use common::storage::SplineInfo;
 use random::{MyRng, Rng, gaussian_vector};
 use ron::ser::{PrettyConfig, to_string_pretty};
@@ -40,6 +41,7 @@ pub struct ModelParameters {
     save_start_svg: bool,
     save_step_svg: bool,
     save_end_svg: bool,
+    time: bool,
 }
 
 impl ModelParameters {
@@ -155,6 +157,7 @@ pub struct Model {
     splines: QuadTree<SplineRef>,
     params: ModelParameters,
     svg_params: SvgParams,
+    precomp: Precomputed,
     boundary: Rect,
     energies: Vec<Energy>,
     acceptance_couter: AcceptanceCounter,
@@ -239,7 +242,7 @@ impl Model {
         let mut potential_sum = 0.0;
         let mut field_sum = 0.0;
         let mut boundary_sum = 0.0;
-        for (position, der, der2) in segment.all_iters(self.params.precision) {
+        for (position, der, der2) in segment.all_iters_p(&self.precomp) {
             let der_norm = der.norm();
             self.length_term(&mut length_sum, der_norm);
             self.bending_term(&mut bending_sum, der, der2, der_norm);
@@ -283,10 +286,10 @@ impl Model {
             .collect::<Vec<&SplineRef>>()
         {
             for other_segment in self.storage.get_segments(other) {
-                for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
+                for (o_pos, o_der) in other_segment.pos_and_der_iter_p(&self.precomp) {
                     let mut inner_sum = 0.0;
                     for my_segment in spline.segments() {
-                        for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
+                        for (m_pos, m_der) in my_segment.pos_and_der_iter_p(&self.precomp) {
                             inner_sum +=
                                 self.interaction_potential((m_pos - o_pos).norm()) * m_der.norm();
                         }
@@ -318,10 +321,10 @@ impl Model {
             .collect::<Vec<&SplineRef>>()
         {
             for other_segment in self.storage.get_segments(other) {
-                for (o_pos, o_der) in other_segment.pos_and_der_iter(self.params.precision) {
+                for (o_pos, o_der) in other_segment.pos_and_der_iter_p(&self.precomp) {
                     let mut inner_sum = 0.0;
                     for my_segment in self.storage.get_segments(spline) {
-                        for (m_pos, m_der) in my_segment.pos_and_der_iter(self.params.precision) {
+                        for (m_pos, m_der) in my_segment.pos_and_der_iter_p(&self.precomp) {
                             let dist = (m_pos - o_pos).norm();
                             let term = self.interaction_potential(dist) * m_der.norm();
                             inner_sum += term;
@@ -438,6 +441,7 @@ impl Model {
             "initial energy needs to be finite"
         );
 
+        let start = cpu_time::ProcessTime::now();
         for (i, temp) in self.params.get_temps().into_iter().enumerate() {
             self.print_temp_status(i + 1, temp)?;
             self.run_at_temp(temp, display_opts.as_ref().map(|(tx, _)| tx))?;
@@ -458,10 +462,14 @@ impl Model {
                 }
             }
         }
+        let cpu_duration = start.elapsed();
+
         if self.params.save_end_svg && !self.params.save_step_svg {
             self.save_svg_doc("img_end.svg")?;
         }
 
+        let path = self.log_dir.join("log.txt");
+        fs::write(path, format!("took {:.3}s", cpu_duration.as_secs_f32()))?;
         println!("\nFinished Running");
         Ok(())
     }

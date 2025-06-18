@@ -35,7 +35,7 @@ fn main() -> anyhow::Result<()> {
         .energy_factors(energy_factors)
         .interaction_radius(0.3)
         .precision(30)
-        .temp_steps(2)
+        .temp_steps(4)
         .set_save_start_svg()
         .set_save_step_svg()
         .build();
@@ -44,8 +44,6 @@ fn main() -> anyhow::Result<()> {
         .potential_from_fn(potential, bounds, (2000, 2000))
         .add_params(parameters)
         .build()?;
-    let start = cpu_time::ProcessTime::now();
     model.run(None)?;
-    println!("time elapsed: {:?}", start.elapsed());
     Ok(())
 }

@@ -1,6 +1,6 @@
 use std::{f32::consts::TAU, usize};
 
-use nalgebra::{Matrix2, Matrix2x4, Matrix4, Matrix4x2, Matrix4x3, Vector2, Vector3, Vector4};
+use nalgebra::{Matrix2x4, Matrix4, Matrix4x2, Matrix4x3, Vector2, Vector3, Vector4};
 use random::{MyRng, Rng};
 use svg::node::element::{
     Path as SvgPath,
@@ -197,12 +197,15 @@ impl Spline {
         self.update_bounds();
     }
 
-    pub fn intersects(&self, other: &Segment, precision: usize) -> bool {
-        let mut out = false;
+    pub fn shortest_dist(&self, other: &Segment, precision: usize) -> f32 {
+        let mut min = f32::INFINITY;
         for segment in self.segments() {
-            out |= other.intersects(&segment, precision);
+            let dist = segment.shortest_dist(other, precision);
+            if dist < min {
+                min = dist
+            }
         }
-        out
+        min
     }
 }
 
@@ -294,6 +297,80 @@ impl Segment {
 }
 
 impl Segment {
+    pub fn position(&self, s: f32) -> Vector {
+        self.0 * MatrixGenerator::position(s)
+    }
+    pub fn derivative(&self, s: f32) -> Vector {
+        self.0 * MatrixGenerator::derivative(s)
+    }
+    pub fn derivative2(&self, s: f32) -> Vector {
+        self.0 * MatrixGenerator::derivative2(s)
+    }
+
+    pub fn pos_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        MatrixGenerator::s_iter(steps).map(|s| self.position(s))
+    }
+    pub fn der_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        MatrixGenerator::s_iter(steps).map(|s| self.derivative(s))
+    }
+    pub fn der2_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
+        MatrixGenerator::s_iter(steps).map(|s| self.derivative2(s))
+    }
+    pub fn pos_and_der_iter(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector)> {
+        MatrixGenerator::s_iter(steps).map(|s| (self.position(s), self.derivative(s)))
+    }
+    pub fn all_iters(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector, Vector)> {
+        MatrixGenerator::s_iter(steps)
+            .map(|s| (self.position(s), self.derivative(s), self.derivative2(s)))
+    }
+
+    pub fn pos_iter_p(&self, precomp: &Precomputed) -> impl Iterator<Item = Vector> {
+        precomp.position().map(|mat| self.0 * mat)
+    }
+    pub fn der_iter_p(&self, precomp: &Precomputed) -> impl Iterator<Item = Vector> {
+        precomp.derivative().map(|mat| self.0 * mat)
+    }
+    pub fn der2_iter_p(&self, precomp: &Precomputed) -> impl Iterator<Item = Vector> {
+        precomp.derivative2().map(|mat| self.0 * mat)
+    }
+    pub fn pos_and_der_iter_p(
+        &self,
+        precomp: &Precomputed,
+    ) -> impl Iterator<Item = (Vector, Vector)> {
+        precomp
+            .position()
+            .zip(precomp.derivative())
+            .map(|(pos, der)| (self.0 * pos, self.0 * der))
+    }
+    pub fn all_iters_p(
+        &self,
+        precomp: &Precomputed,
+    ) -> impl Iterator<Item = (Vector, Vector, Vector)> {
+        precomp
+            .position()
+            .zip(precomp.derivative())
+            .zip(precomp.derivative2())
+            .map(|((pos, der), der2)| (self.0 * pos, self.0 * der, self.0 * der2))
+    }
+}
+
+impl Segment {
+    pub fn shortest_dist(&self, other: &Self, precision: usize) -> f32 {
+        let mut min = f32::INFINITY;
+        for p1 in self.pos_iter(precision) {
+            for p2 in other.pos_iter(precision) {
+                let dist = (p1 - p2).norm();
+                if dist < min {
+                    min = dist
+                }
+            }
+        }
+        min
+    }
+}
+pub struct MatrixGenerator;
+
+impl MatrixGenerator {
     pub fn s_iter(steps: usize) -> impl Iterator<Item = f32> {
         (0..steps).map(move |i| i as f32 / steps as f32)
     }
@@ -338,63 +415,55 @@ impl Segment {
         -1.0, 2.0,
     );
 
-    pub fn position(&self, s: f32) -> Vector {
-        self.0 * Self::CHAR_MAT_POS * Self::get_bernstein_3(s)
+    pub fn position(s: f32) -> Vector4<f32> {
+        Self::CHAR_MAT_POS * Self::get_bernstein_3(s)
     }
-    pub fn derivative(&self, s: f32) -> Vector {
-        3.0 * self.0 * Self::CHAR_MAT_DER * Self::get_bernstein_2(s)
+    pub fn derivative(s: f32) -> Vector4<f32> {
+        3.0 * Self::CHAR_MAT_DER * Self::get_bernstein_2(s)
     }
-    pub fn derivative2(&self, s: f32) -> Vector {
-        6.0 * self.0 * Self::CHAR_MAT_DER_2 * Self::get_bernstein_1(s)
+    pub fn derivative2(s: f32) -> Vector4<f32> {
+        6.0 * Self::CHAR_MAT_DER_2 * Self::get_bernstein_1(s)
     }
 
-    pub fn pos_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        Self::s_iter(steps).map(|s| self.position(s))
-    }
-    pub fn der_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        Self::s_iter(steps).map(|s| self.derivative(s))
-    }
-    pub fn der2_iter(&self, steps: usize) -> impl Iterator<Item = Vector> {
-        Self::s_iter(steps).map(|s| self.derivative2(s))
-    }
-    pub fn pos_and_der_iter(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector)> {
-        Self::s_iter(steps).map(|s| (self.position(s), self.derivative(s)))
-    }
-    pub fn all_iters(&self, steps: usize) -> impl Iterator<Item = (Vector, Vector, Vector)> {
-        Self::s_iter(steps).map(|s| (self.position(s), self.derivative(s), self.derivative2(s)))
-    }
-}
-
-fn line_intersects(line_1: &[Vector; 2], line_2: &[Vector; 2]) -> bool {
-    let mat = match Matrix2::from_columns(&[line_2[1] - line_2[0], line_1[0] - line_1[1]])
-        .try_inverse()
-    {
-        Some(inv) => inv,
-        None => return false,
-    };
-    let intersection_vec = mat * (line_1[0] - line_2[0]);
-    (0.0 <= intersection_vec.x && intersection_vec.x <= 1.0)
-        && (0.0 <= intersection_vec.y && intersection_vec.y <= 1.0)
-}
-
-impl Segment {
-    pub fn intersects(&self, other: &Self, precision: usize) -> bool {
-        let points_1: Vec<_> = Segment::s_iter_end(precision)
-            .map(|s| self.position(s))
-            .collect();
-        let points_2: Vec<_> = Segment::s_iter_end(precision)
-            .map(|s| other.position(s))
-            .collect();
-        for line_1 in points_1.windows(2) {
-            let line_1 = unsafe { &*(line_1.as_ptr() as *const [Vector; 2]) };
-            for line_2 in points_2.windows(2) {
-                let line_2 = unsafe { &*(line_2.as_ptr() as *const [Vector; 2]) };
-                if line_intersects(line_1, line_2) {
-                    return true;
-                }
-            }
+    pub fn precompute_mats(steps: usize) -> Precomputed {
+        Precomputed {
+            steps,
+            position: Self::s_iter_end(steps).map(|s| Self::position(s)).collect(),
+            derivative: Self::s_iter_end(steps)
+                .map(|s| Self::derivative(s))
+                .collect(),
+            derivative2: Self::s_iter_end(steps)
+                .map(|s| Self::derivative2(s))
+                .collect(),
         }
-        return false;
+    }
+}
+
+pub struct Precomputed {
+    steps: usize,
+    position: Vec<Vector4<f32>>,
+    derivative: Vec<Vector4<f32>>,
+    derivative2: Vec<Vector4<f32>>,
+}
+
+impl Precomputed {
+    pub fn position(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.position[0..self.steps - 1].iter()
+    }
+    pub fn position_end(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.position.iter()
+    }
+    pub fn derivative(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.derivative[0..self.steps - 1].iter()
+    }
+    pub fn derivative_end(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.derivative.iter()
+    }
+    pub fn derivative2(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.derivative2[0..self.steps - 1].iter()
+    }
+    pub fn derivative2_end(&self) -> impl Iterator<Item = &Vector4<f32>> {
+        self.derivative2.iter()
     }
 }
 

@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use chrono::Utc;
+use common::spline::MatrixGenerator;
 use convolve2d::{convolve2d, kernel};
 use image::DynamicImage;
 
@@ -30,6 +31,7 @@ pub struct ParamBuilder {
     save_step_svg: bool,
     save_end_svg: bool,
     make_plots: bool,
+    time: bool,
 }
 
 impl ParamBuilder {
@@ -60,6 +62,7 @@ impl ParamBuilder {
             save_step_svg: self.save_step_svg,
             save_end_svg: self.save_end_svg,
             make_plots: self.make_plots,
+            time: self.time,
         }
     }
     pub fn spline_count(mut self, spline_count: usize) -> Self {
@@ -138,6 +141,14 @@ impl ParamBuilder {
         self.save_end_svg = false;
         self
     }
+    pub fn set_time(mut self) -> Self {
+        self.time = true;
+        self
+    }
+    pub fn unset_time(mut self) -> Self {
+        self.time = false;
+        self
+    }
 }
 impl Default for ParamBuilder {
     fn default() -> Self {
@@ -147,6 +158,7 @@ impl Default for ParamBuilder {
             save_start_svg: false,
             save_step_svg: false,
             save_end_svg: true,
+            time: true,
             spline_count: None,
             segment_len: None,
             max_segments: None,
@@ -296,11 +308,9 @@ impl ModelBuilder {
                 &mut rng,
             );
             let mut intersection = false;
-            // FIXME: checking for intersections is not enough needs to be same as energy
-            // calcualtion
             'outer: for other in splines.query_intersects(spline.bounding_box()) {
                 for o_segment in storage.get_segments(other) {
-                    if spline.intersects(&o_segment, params.precision * 20) {
+                    if spline.shortest_dist(&o_segment, params.precision) < 0.001 {
                         intersection = true;
                         break 'outer;
                     }
@@ -332,6 +342,7 @@ impl ModelBuilder {
             splines: splines,
             markings: storage.default_spline_info(),
             storage: storage,
+            precomp: MatrixGenerator::precompute_mats(params.precision),
             params,
             svg_params: self.svg_params.unwrap_or(SvgParams {
                 format: (

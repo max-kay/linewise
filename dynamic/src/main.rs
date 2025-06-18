@@ -1,15 +1,15 @@
 use common::{Spline, Vector};
 
 struct Model {
-    pos: Spline,
-    vel: Spline,
+    _pos: Spline,
+    _vel: Spline,
 }
 
 impl Model {
     pub fn new(initial_pos: Spline, initial_vel: Spline) -> Self {
         Self {
-            pos: initial_pos,
-            vel: initial_vel,
+            _pos: initial_pos,
+            _vel: initial_vel,
         }
     }
 }
